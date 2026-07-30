@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# headless-bench + determinism artifacts
+tools/**/out/
+*.csv
+!tools/headless-bench/schema.csv
+replays/
+*.ovr
+
+.DS_Store
+.env
+.env.local

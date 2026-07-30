@@ -30,7 +30,7 @@ The MOBA genre is locked in top-down camera. The hero shooter genre (Overwatch, 
 | # | Pillar | What it means in practice |
 |---|--------|---------------------------|
 | **P1** | **Every death is a story** | Killcam, announcer, bounty glow. You always know exactly who killed you and why you lost that fight. No "I dunno what happened." |
-| **P2** | **Contested economy** | Gold is never passive. Every unit of income is a physical object someone can shoot away from you. |
+| **P2** | **Contested economy** | Souls are never passive. Every unit of income is a physical object someone can shoot away from you. **This pillar is enforced numerically:** `headless-bench` asserts passive trickle ≤25% of median per-player income, so it cannot silently erode during balance tuning. |
 | **P3** | **Movement is the flex** | Dash, slide, zipline, mantle. Positioning outplays are as valuable as aim. Movement tech is the primary clip source. |
 | **P4** | **Legible in 5 seconds** | A stream viewer with zero context understands who's winning by looking at the screen for five seconds. |
 | **P5** | **Comebacks are always live** | No game is decided before the last 90 seconds. Steals, bounties, and catch-up mechanics guarantee it. |
@@ -74,7 +74,7 @@ SPAWN → PUSH LANE → CONTEST SOULS → BUY UPGRADE →
 **Nested loops:**
 - **5s loop** — aim, shoot, dash, take cover
 - **25s loop** — creep wave arrives, contest souls, win/lose the wave
-- **2min loop** — accumulate gold → buy an upgrade → feel measurably stronger
+- **2min loop** — accumulate souls → buy an upgrade → feel measurably stronger
 - **4min loop** — MID PIT objective spawns → team fight → snowball or reset
 - **12min loop** — match
 
@@ -125,11 +125,15 @@ This is the thing that makes the game *ours*. It must be flawless.
 |---|---|---|
 | Camera | Over-shoulder, 3.5m back, 0.6m right | Eye position |
 | FOV | 95° (wider peripheral) | 80°, 65° when ADS |
-| Hipfire spread | ×1.4 penalty | ×1.0 baseline |
+| Hipfire spread | **×1.0 baseline** | ×1.0 baseline |
 | ADS available | No | Yes |
-| Movement speed | ×1.0 | ×1.0 (×0.6 while ADS) |
+| Movement speed | ×1.0 | ×1.0 (**×0.6 while ADS**) |
 | Ability aiming | Full 3D arc preview, ground-target reticle | Crosshair only, no arc preview |
-| Best for | Traversal, ability combos, awareness, melee | Ranged duels, precision, long lane pokes |
+| Best for | Fighting **while moving** — dash/grapple/slide duels, ability combos, melee | Standing precision, long lane pokes, orb sniping |
+
+**The axis is mobility versus precision, not "good camera versus bad camera."** The original spec gave TPS a ×1.4 hipfire penalty *and* no ADS, while §5.3's anti-peek fix deliberately strips TPS of its one informational advantage — leaving it with nothing but downsides in a fight. Combined with hold-RMB auto-switching, the dominant macro was 100% TPS traversal plus RMB for every engagement: zero `V` presses, and the signature mechanic reduced to a traversal camera with a decorative keybind. Q1's "<15% of players toggle" instrument would then have read near zero for a reason that has nothing to do with player preference.
+
+With the penalty removed, the trade is real in both directions: TPS keeps full move speed, 95° peripheral vision and ability arcs, so it is the mode you fight in while dashing, grappling and sliding — which is Pillar P3, and the clip mode. FPS buys accuracy with ×0.6 speed and 80/65° tunnel vision. `BAL.TPS_HIPFIRE_SPREAD_MULT` is a single constant; if M0 shows TPS still dominates, raise it and re-run `peek-test`.
 
 ### 5.2 Switching rules
 
@@ -144,10 +148,16 @@ The hold-to-ADS path means players who never learn `V` still get the full FPS ex
 TPS lets you see around corners your character can't. Unsolved, this makes TPS strictly dominant and kills FPS as a choice. Three layered fixes, all required:
 
 1. **Camera occlusion pull-in.** Standard spring-arm: camera collides with geometry and pulls toward the head. Already limits extreme peeking.
-2. **Enemy visibility gating (the important one).** In TPS, an enemy is only *rendered* if they are visible from the **player's head position**, not the camera position. Ray-test head→enemy each frame at 15Hz. If occluded from the head but visible from the camera: render the enemy as a **faint red silhouette outline only** (no model, no hitbox highlight, no nameplate) for 0.4s, then hide. This preserves "something is there" awareness without giving free information.
-3. **Hitreg is head-authoritative.** Bullets originate from the muzzle in world space, never from the camera. If your reticle is on a wall from the character's perspective, you shoot the wall. Reticle turns dim red when the muzzle→target ray is blocked.
+2. **Enemy visibility gating (the important one).** An enemy is only *rendered* if they are visible from the **player's head position**, not the camera position. Ray-test head→enemy **every 4 ticks (15Hz)**, tick-locked — not per frame, and not free-running, or it is not deterministic and bots cannot share it. Three rays per target (head/chest/feet); a single ray is unusable against a map with sightline breakers every ~15m. Hysteresis: two consecutive occluded samples before hiding, 0.2s minimum visible dwell, **fail closed** on a stale sample. If occluded from the head but visible from the camera: render a **faint red silhouette outline only** (no model, no hitbox highlight, no nameplate) for 0.4s, then hide.
+3. **Hitreg is head-authoritative.** Bullets originate from the muzzle in world space, never from the camera. If your reticle is on a wall from the character's perspective, you shoot the wall. Reticle turns dim red when the muzzle→target ray is blocked. **The gate never rejects a shot server-side** — see §10.4 rule 4.
 
-**Acceptance test:** two bots on opposite sides of a corner. In TPS the peeking bot must not achieve >5% higher first-shot hit rate than in FPS. Automate this in `tools/headless-bench/peek-test.ts`.
+**Where this lives, and why it is not a rendering detail.** `canSee()` is a pure query in `packages/sim/src/systems/visibility.ts`, consumed by three callers that must get the identical answer: the renderer, the bot AI, and `tools/peek-test` running headless. Put it in the renderer and bots become omniscient, which silently invalidates every number `headless-bench` produces.
+
+**The information-leak tradeoff, stated honestly.** Drawing the 0.4s silhouette requires the client to hold the exact transform of an enemy it is not allowed to fully see, and §1.4 rules out anti-cheat beyond server authority. Area-of-interest culling does not help here — a single 220×35m lane with an open roof layer puts nearly every hero inside nearly every AOI. So move the gate into the **snapshot encoder**: for heroes failing the head-LOS test, send a 0.5m-quantized coarse position plus a silhouette flag instead of the precise record. That is exactly the fidelity the outline needs, it costs *fewer* bits than the full record, and it keeps the client gate as a rendering nicety rather than the mechanism. Residual risk after that is accepted.
+
+**Acceptance test.** Two bots on opposite sides of a corner. Requirement: `|hit_rate_TPS − hit_rate_FPS| ≤ 5 percentage points` over **≥2,000 seeded duels per arm**, with the seed sweep pinned in the test file and `TPS_HIPFIRE_SPREAD_MULT` forced to 1.0 on both arms.
+
+Three things were wrong with the original statement of this test and all three mattered: it ran with the ×1.4 spread penalty active, so TPS scored lower by construction and the test passed without measuring peeking at all; it was one-sided (`>5% higher`), so TPS landing 10 points *below* FPS — the dead-mode failure — also passed; and it specified no sample size, when resolving 5 points between two ~50% proportions needs roughly 1,560 duels per arm for 80% power. Lives in `tools/peek-test/`. **Needs a stub bot at M0** — "stand at a mark, strafe out at a fixed rate, fire on first sight" is ~50 lines and needs no behaviour tree — because the system it guards ships at M0 and the real bots do not arrive until M3.
 
 ---
 
@@ -280,12 +290,26 @@ Design constraint: each must be describable in one sentence and identifiable by 
 **This section is not polish. It is the product.** These ship in M6, not "later."
 
 ### 9.1 CLIP BUFFER (highest priority)
-- Server keeps a rolling **20-second ring buffer** of compressed world snapshots per match
-- Auto-triggers on: triple takedown, objective steal, sub-10%-HP survival that leads to a kill, tower backdoor, cross-map ult kill
-- On trigger: writes a `.ovr` replay file (snapshot deltas only, ~200KB)
-- `F9` at any time exports the last 20 seconds manually
-- Replays are viewable in a **free director camera** with slow-mo, orbit, and per-player POV switching
-- Client-side MP4 export via `MediaRecorder` on an offscreen canvas render
+**`.ovr` is an input log, not a snapshot buffer, and it is defined at M1 — not M6.**
+
+```
+.ovr = { seed, build_hash, balance_hash, input_log }
+```
+
+Because §10.3 guarantees `tick()` is pure, the entire match replays from its inputs. At 8 bytes/tick × 60Hz × 6 players that is ~2.9 KB/s — **~2 MB for a whole 12-minute match**, seekable by re-simulating, and produced *for free* by `tools/replay-diff`, which M1 already requires. The original spec — snapshot deltas at ~200KB per 20 seconds — is the design you would need only if the sim were non-deterministic, and it buys 3% of the match for 3× the bytes per second. It also forces a server ring buffer the server does not need, since the server is authoritative over the input stream and already has it. Accept the one real cost honestly: input-log replays break across sim or balance changes, so the build and balance hashes are pinned in the file and stale links expire.
+
+- Auto-triggers on: triple takedown, objective steal, sub-10%-HP survival that leads to a kill, tower backdoor, cross-map ult kill. A trigger marks in/out points on an artifact that already exists.
+- `F9` marks the last 20 seconds manually.
+- Replays are viewable in a **free director camera** with slow-mo, orbit, and per-player POV switching.
+
+**The delivery chain — this is the part that was missing, and it is the part success criterion 4 depends on.** As originally specified the clip was born server-side and died there: no route, no transport, no host, no URL, no retention policy, and — since §1.4 bans accounts — no owner. The document then filed the missing piece as backlog item 9. **The clip artifact is a URL, not a file:**
+
+1. Server writes the replay under an 8-character id.
+2. `GET /r/<id>` opens the existing client in replay mode. No account, no install, 7-day TTL.
+3. The short URL is burned into the corner of the render. A video is a dead end; a link is a funnel.
+4. MP4 export via `MediaRecorder` stays, as the *secondary* path — drive it with `captureStream(0)` + `requestFrame()`, or it records in real time.
+
+**Firefox has no MP4 muxer in `MediaRecorder`** (`isTypeSupported('video/mp4')` is false; it emits WebM), so M6's criterion as originally written was unachievable through the specified API. Ship "MP4 in Chrome, WebM in Firefox," or add a ~30KB WASM muxer. Never `ffmpeg.wasm` — it does not fit the <9 MB budget.
 
 ### 9.2 KILLCAM
 1.2s, killer's POV, from 0.8s before the fatal shot. Non-skippable for the first 0.6s (this is deliberate — the sting is the point, and it teaches players what killed them). Displays the killer's equipped upgrades and remaining HP.
@@ -297,11 +321,13 @@ Escalating tiers with rare variants (5% roll) so clips don't feel repetitive:
 |---|---|
 | 2 kills / 5s | "DOUBLE" |
 | 3 kills / 8s | "TRIPLE" |
-| 3 kills solo, no deaths, 12s | "OVERRUN" (title drop) |
+| 3 kills solo, no deaths, 12s | "OVRRUN" (title drop — spelled like the game) |
 | Soul denial streak ×5 | "STARVED" |
 | Objective stolen at <5% HP | "**ROBBED**" — loudest sound in the game |
-| Killing a +450 bounty | "BOUNTY CLAIMED" |
+| Killing a max bounty | "BOUNTY CLAIMED" |
 | Team wipe | "WIPED" |
+
+**Priority rule.** One announcer channel, highest tier wins, 2.5s lockout. Without it a solo triple currently fires TRIPLE, OVRRUN and WIPED simultaneously.
 
 ### 9.4 THE STEAL
 The MID PIT boss can be last-hit by *anyone*. Whoever deals the killing blow takes the full 500 souls + buff for their team. No exceptions, no protection mechanic, no smite-equivalent that removes the tension.
@@ -314,7 +340,16 @@ If a team is >2500 souls behind at any point after 6:00, their core emits **SURG
 ### 9.6 PLAY OF THE MATCH
 Post-match, score every 6-second window across all players by a weighted heuristic (damage dealt × takedowns × improbability-of-survival × objective value). Play the top window as a replay. Winner gets a nameplate flourish. ~30 lines of code, enormous perceived value.
 
-### 9.7 Spectator / stream mode
+### 9.7 THE LINK (invite / party)
+
+**The unit that adopts a 3v3 game is a group, not an individual.** The browser-first thesis in Q4 rests entirely on a pasted link, and as originally specified the only thing a link could do was drop you into a solo queue — the closest thing to an invite flow, "custom lobbies," was explicitly backlogged. Two friends who click the same clip could not end up in the same match, which converts every shared clip into zero retained players.
+
+- `?r=<6-char>` creates or joins a private room. The lobby shows a copy-link button.
+- Empty slots backfill with bots after 45s. The game is never unplayable.
+- "Rematch" preserves the room — which means the room object already has to persist, so exposing it as a code is roughly 50 lines against a room manager M4 must build anyway.
+- **Disconnects:** a client that closes its tab is replaced by a bot within 3s at the same position, souls and equipped upgrades, and can reclaim its slot for 120s by reopening the link. 3v3 is the most leaver-fragile team size in the reference table — one leaver is 33% of a team, versus 17% at Deadlock's 6v6 — and §1.4's no-accounts rule makes a leaver penalty unconstructible, so bot takeover is the only available answer. Nothing in the original document handled a client that vanished.
+
+### 9.8 Spectator / stream mode
 - Observer slot with free-cam, player-lock, and auto-director mode
 - **Stream overlay export**: a `/overlay` route rendering live soul-differential, tower state, and ult timers as a transparent OBS browser source
 - Spectator delay toggle (default 60s) to prevent stream sniping
@@ -330,11 +365,13 @@ Post-match, score every 6-second window across all players by a weighted heurist
 | Language | TypeScript, strict | One language across sim/client/server |
 | Sim | Pure TS, zero deps | Runs in Node, Worker, and browser identically |
 | Renderer | Three.js (r16x) | Known quantity, fast iteration |
-| Physics | Custom capsule-vs-AABB + raycast, ~500 LOC | A full physics engine is overkill and non-deterministic. We need: capsule collide-and-slide, raycasts, sphere overlaps. That's it. |
+| Physics | Custom capsule-vs-AABB + raycast + **swept tests**, ~1200 LOC | A full physics engine is overkill and non-deterministic. We need: capsule collide-and-slide, raycasts, sphere overlaps, **swept sphere-vs-AABB and swept sphere-vs-capsule**. Swept is not optional: a 45 m/s projectile advances 0.75m per tick at 60Hz against a ~0.8m hero capsule, so discrete per-tick tests let RIFT's rockets pass through people. The honest breakdown — collide-and-slide with slope limit and step-up (~200), broadphase (~130), ray primitives (~100), CCD (~120), mantle probes (~120), zipline constraint (~80), lag-comp history (~80), epsilon policy (~50) — lands at ~1200 minimum. This gets its own gate; it is what silently eats M1. |
 | Client shell | Vite + vanilla TS (**not** Next.js) | This is a game, not a site. No SSR, no React reconciler in the frame loop. |
 | Server | Node 22 + `uWebSockets.js` | Fastest WS implementation in Node |
-| Transport | Binary WebSocket, custom bitpacked protocol | WebRTC/UDP is a later optimization, not an MVP requirement at 3v3 |
-| Matchmaking | In-memory room manager, single process | 500 CCU on one Hetzner box is plenty for validation |
+| Transport | Binary WebSocket, custom bitpacked protocol | WebRTC/UDP is a later optimization, not an MVP requirement at 3v3 — **but see the caveat below** |
+| Matchmaking | In-memory room manager, single process, **join-by-URL room codes** | 500 CCU on one Hetzner box is plenty for validation |
+
+**Transport caveat.** M4's criterion "playable at 150ms with 2% packet loss" is not reachable over ordered-reliable TCP: at 20 snapshots/sec, 2% loss is one loss every 2.5 seconds, and TCP delivers nothing behind a lost segment until retransmission completes — ≥1 RTT, plus congestion-window reduction on a stream of small packets. A 150ms freeze every 2.5s is not "no visible rubber-banding." Two options, both acceptable, neither silent: promote WebRTC unreliable DataChannel into M4 with a WS fallback, or amend the criterion to state the expected hitch. **Either way, encode deltas against the last acked baseline from day one** — that is the only part that is expensive to change later, and it makes a future transport swap a swap rather than a protocol rewrite.
 | Deploy | Hetzner CX32 + Caddy | Already in your stack |
 | Build/test | Vitest, headless bot harness | |
 
@@ -343,14 +380,16 @@ Post-match, score every 6-second window across all players by a weighted heurist
 ```
 ovrrun/
 ├── packages/
-│   ├── sim/                    # ⚠️ PURE. No DOM, no THREE, no Date.now()
+│   ├── sim/                    # ⚠️ PURE. No DOM, no THREE, no Date.now(), no Math.sin
 │   │   ├── src/
 │   │   │   ├── world.ts        # tick(state, inputs[]) -> state
-│   │   │   ├── entities/       # hero, trooper, orb, tower, projectile
-│   │   │   ├── systems/        # movement, combat, economy, ai, objectives
-│   │   │   ├── collision.ts    # capsule/AABB, raycast, sphere overlap
+│   │   │   ├── entities/       # hero, trooper, orb, tower, projectile, boss
+│   │   │   ├── systems/        # movement, combat, economy, ai, objectives,
+│   │   │   │                   #   visibility  ← MUST be here, not in render
+│   │   │   ├── collision.ts    # capsule/AABB, raycast, sphere overlap, swept
 │   │   │   ├── balance.ts      # ⭐ ALL tunable numbers, single file
-│   │   │   └── rng.ts          # seeded xorshift128, no Math.random anywhere
+│   │   │   ├── mathd.ts        # ⭐ portable sin/cos/atan2/pow — no Math.* trig
+│   │   │   └── rng.ts          # stateless rngFor(tick, entityId, salt)
 │   │   └── test/
 │   ├── protocol/               # bitpack encode/decode, shared enums
 │   ├── client/
@@ -359,52 +398,84 @@ ovrrun/
 │   │   ├── input/              # keybinds, mouse, camera controller
 │   │   ├── ui/                 # HUD (plain DOM overlay, no framework)
 │   │   └── replay/             # .ovr playback, director cam, MP4 export
-│   ├── server/                 # room manager, authority loop, clip buffer
-│   └── bots/                   # AI controllers, shared client/server
+│   ├── server/                 # room manager, authority loop, replay store
+│   ├── bots/                   # AI controllers, shared client/server
+│   └── telemetry/              # anon id + event log — Q1 and Q5 need this at M3
 ├── tools/
 │   ├── headless-bench/         # ⭐ run N matches bot-vs-bot, emit CSV
 │   ├── peek-test/              # TPS abuse regression test
-│   └── replay-diff/            # determinism verifier
+│   ├── replay-diff/            # determinism verifier
+│   ├── netsim/                 # delay/jitter/loss/reorder — M4 is unverifiable without it
+│   └── perf-harness/           # Playwright: frame time, draw calls, tris, bundle size
 └── assets/                     # .glb models, audio
 ```
+
+**`systems/visibility.ts` is the one that gets misplaced.** §5.3 describes the head-LOS gate as a *rendering* rule. If it lives in the renderer, then bots — which read `WorldState` directly and have no perception model — see through walls, which means `headless-bench` measures TTK and hero win rates in a different game than humans play, and `peek-test` compares two omniscient agents and passes forever. It must be a pure `canSee(state, viewerId, targetId)` query in `sim`, consumed identically by the renderer, the bot AI, and the headless peek test. Run it tick-locked (every 4 ticks) with hysteresis — 2 consecutive occluded samples before hiding, 0.2s minimum visible dwell — and fail *closed* on a stale sample.
 
 ### 10.3 The simulation contract
 
 ```ts
 // The entire game is this function. Everything else is I/O.
-function tick(state: WorldState, inputs: PlayerInput[], dt: 1/30): WorldState
+// dt is NOT a parameter — it is a module constant. A caller that can pass a
+// different dt during catch-up is a caller that can break determinism.
+function tick(state: WorldState, inputs: PlayerInput[]): WorldState
 ```
 
 **Non-negotiable rules:**
-- Fixed timestep **30Hz**. Never variable. Never `dt` from `requestAnimationFrame`.
+- Fixed timestep **60Hz**. Never variable. Never `dt` from `requestAnimationFrame`.
 - No `Math.random()` — only seeded `rng.ts`
 - No `Date.now()` — only `state.tick`
 - No floating-point accumulation across ticks without explicit quantization
 - `tick()` must be **pure**: same state + same inputs = byte-identical output, verified by `tools/replay-diff`
 
-This is what makes the whole plan work. It gives you: offline play, online play, replays, bot testing, and automated balance benchmarking — from one code path.
+**Why 60Hz and not 30Hz.** At 30Hz the two hitscan weapons land on half-ticks — 720 RPM is 2.5 ticks per shot and 240 RPM is 7.5 — so both fire on a jittering 2/3-tick cadence, and a `+12% fire rate` upgrade rounds to either −17% or +25%. The 20Hz snapshot rate is also 1.5 ticks, so entity interpolation spacing alternates. At 60Hz every one of these divides evenly (SMG 5 ticks, Rifle 15, Shotgun 30, Launcher 45, snapshot every 3, visibility gate every 4), aim sampling latency halves, and projectile travel per tick drops enough to make swept collision tractable. At 3v3 the CPU cost is irrelevant against the §10.6 budget.
+
+**The numeric contract — decide this at M1, not M4.** "Byte-identical across Node, Worker and browser" is *not* achievable if sim code calls `Math.sin/cos/tan/atan2/pow/exp`: ECMAScript leaves those implementation-approximated, and V8, SpiderMonkey and JSC do not agree bit-for-bit — nor do V8 versions with each other. `+ - * / %` are spec-mandated round-to-nearest-even and FMA contraction is spec-illegal, so basic arithmetic **is** portable; `Math.sqrt` lowers to the hardware instruction and is correctly rounded, so it is safe in practice. Therefore:
+
+- `packages/sim/src/mathd.ts` provides portable `sin/cos/atan2/pow/exp` built from `+ - * /` and `sqrt` only.
+- An ESLint rule bans `Math.*` inside `packages/sim` except `abs/min/max/floor/ceil/trunc/round/sign/sqrt`, and bans the `**` operator. **CI-enforced, not eyeballed.**
+- Positions and velocities integrate in integer millimetres (a 220m map fits in 18 bits). Floats survive only inside collision queries.
+
+This matters more than it looks: the sim runs capsule collide-and-slide, which is dense in `if (t < eps)` branch tests. A 1-ULP difference flips which face you slide along, and the divergence is macroscopic **within one tick** — not a slow drift you can quantize away later.
+
+This contract is what makes the whole plan work. It gives you: offline play, online play, replays, bot testing, and automated balance benchmarking — from one code path.
 
 ### 10.4 Netcode
 
 | Concern | Approach |
 |---|---|
-| Sim rate | 30Hz server authoritative |
-| Snapshot rate | 20Hz, delta-compressed, area-of-interest culled |
+| Sim rate | 60Hz server authoritative |
+| Snapshot rate | 20Hz (every 3 ticks), delta-compressed, area-of-interest culled |
+| Snapshot encoding | Delta **from the last client-acked baseline**, not from the previous snapshot |
 | Client prediction | Client runs identical `tick()` on local input immediately |
-| Reconciliation | Server acks input seq; on mismatch >0.05m, rewind to acked state and replay buffered inputs |
+| Reconciliation | Server acks input seq; on mismatch >`RECONCILE_THRESHOLD`, rewind to acked state and replay buffered inputs |
+| Error correction | Below `HARD_SNAP_THRESHOLD`, correct the sim instantly but hold the residual in a **render-only offset that decays over ~120ms**. Above it, teleport. Yaw and pitch are client-authoritative and are **never** reconciled. |
 | Entity interpolation | Remote players rendered 100ms in the past, smooth-lerped |
-| Lag compensation | Server rewinds hitboxes to shooter's rendered time, clamped at 200ms |
+| Lag compensation | Server rewinds **the world**, not just hitboxes, to the shooter's rendered time, clamped at 200ms |
 | Bandwidth budget | **<12 KB/s down, <3 KB/s up** per client |
-| Input | 4 bytes/tick bitpacked (movement + buttons + quantized yaw/pitch) |
+| Input | **8 bytes/tick** bitpacked (seq 8, movement 4, buttons 13, yaw 13, pitch 12, sub-tick fire phase 5) |
+| Input redundancy | Each uplink packet carries the last 3 unacked inputs. Missing input ⇒ repeat last for ≤3 ticks, then zero movement axes while holding view angles. Never freeze the entity. |
+
+**Four rules that are easy to get wrong and expensive to retrofit:**
+
+1. **Input is 8 bytes, not 4.** Count the mandatory fields — a sequence number (required, since the server acks input seq), two movement axes, and the ~13 buttons this design actually needs (fire, ADS, `V`, dash, Q, E, R, reload, melee, jump/mantle, slide, zipline, buy) — and 4 bytes leaves ≤7 bits for yaw *and* pitch combined. That is ~0.7°/step, roughly 3.4× a head's angular size at the Rifle's falloff limit, which deletes the ×1.5 headshot multiplier and HALO's entire identity. 8 bytes at 60Hz is ~1.6 KB/s including packet overhead, comfortably inside the <3 KB/s budget. **The client must quantize yaw/pitch *before* feeding them to its own prediction**, or client and server predict from different angles on every shot.
+
+2. **RNG is stateless and derived, never a global stream.** `rngFor(tick, entityId, salt)` seeded from `hash(matchSeed, tick, entityId, salt)`. A single stateful stream cannot be predicted client-side — the client does not know how many draws other players consumed — so the Shotgun's 8 pellets would draw from different stream positions on client and server, and it would never trip reconciliation because spread does not move anyone. It would simply feel broken, for exactly one hero. Every simultaneous-resolution order must also be fixed (VOLT's chain target, RIFT's Displace victim order): nearest, then lowest entity id.
+
+3. **Dynamic colliders live in the rewind history.** BULWARK's Slab is a runtime-spawned, destructible, expiring collider that blocks bullets both ways — and blocking a shot at the exact frame is its advertised clip. Storing rewound hero capsules but tracing bullets against present-time geometry means a clean shot is eaten by a wall that did not exist when the trigger was pulled. The history ring buffer holds hero capsules, head spheres, **and** the AABB/HP/alive-state of every Slab, mine and Collapse dome. Slab placement snaps to 90° yaw so it stays an AABB.
+
+4. **Visibility gating is presentation, never authority.** §5.3's head-LOS test must never reject a shot server-side — high-ping players would get shots nullified for a reason no HUD can explain.
 
 ### 10.5 Bots
 Bots are **first-class, not a testing afterthought.** They:
-- Fill matches during low population (invisible backfill, generic names)
-- Enable the entire M0–M3 development phase without networking
+- Fill matches during low population (invisible backfill, generic names) **and take over on disconnect** (§9.7)
+- Enable the entire M0–M3 development phase without networking — including a **stub bot at M0** for `peek-test`
 - Power `headless-bench` for automated balance tuning
 - Provide the practice mode
 
 Three difficulty tiers via a single reaction-time + aim-error parameter pair. Behavior tree, not ML.
+
+**Bots have a perception model.** Target acquisition is gated on `canSee()` from `systems/visibility.ts`, plus an audio channel for footsteps within a threshold radius (§4.1 makes tunnel footsteps a deliberate information source). Bots that read `WorldState` directly are omniscient, and since M3's TTK, §8's win rates and the whole M8 tuning loop are measured bot-vs-bot, an omniscient bench measures a *different game* than humans play — one where all six participants see through walls. This is the single cheapest way to make every balance number in the project wrong.
 
 ### 10.6 Performance budget
 
@@ -417,7 +488,9 @@ Three difficulty tiers via a single reaction-time + aim-error parameter pair. Be
 | Time to first match | <6s from cold load |
 | Server CPU | <5% of one core per active match |
 
-Enforced by `tools/headless-bench` — any milestone that regresses these fails its acceptance criteria.
+Enforced by **`tools/perf-harness`** (frame time, draw calls, triangles, download size, time to first match) and **`tools/headless-bench`** (server CPU). Any milestone that regresses these fails its acceptance criteria.
+
+`headless-bench` is a Node bot-match CSV runner with no GPU and no browser, so it can observe exactly one of these six budgets — which made §13's "if `headless-bench` regresses any perf budget, revert" inert for the other five. `perf-harness` is Playwright driving a fixed replay: draw calls and triangles from `renderer.info`, frame time as p99 over 600 frames, GPU string via `WEBGL_debug_renderer_info`, bundle size from the Vite manifest, time-to-first-match from a cold navigation.
 
 ---
 
@@ -445,57 +518,91 @@ Enforced by `tools/headless-bench` — any milestone that regresses these fails 
 
 Each milestone is a **vertical slice that is playable and testable**. Never build a system that can't be exercised in the same session.
 
-### M0 — Feel Prototype *(target: 1 session)*
-Grey box arena. One capsule character. WASD + mouse look. TPS/FPS toggle. One hitscan weapon. Dash. Shoot static targets.
-- ✅ 60fps stable
+**On the estimates.** The original figures totalled 13–17 sessions for a deterministic netcoded shooter with 12 abilities, bots, replays, spectator and video export. The honest number for the same scope at the same discipline is **34–50**, concentrated in M3, M4 and M6. The estimates gate nothing — §13 advances on ✅ criteria passing programmatically, not on elapsed time — so this is a scheduling correction, not a structural one. It matters for exactly one reason: §13's kill criterion *"M4 can't hit 80ms after 6 iterations"* is a 6-iteration budget on a ~10-session milestone, so it fires during normal progress. See §13.
+
+### M0 — Feel Prototype *(1–2 sessions)*
+Grey box arena. One capsule character. WASD + mouse look. TPS/FPS toggle. One hitscan weapon. **Dash, slide, mantle, zipline.** Shoot static targets.
+- ✅ 60fps stable **on the named scene at the Iris Xe tier**, p99 over 600 frames, measured by `tools/perf-harness` — not on the dev machine, and not on an empty box
 - ✅ Camera transition ≤0.15s with no clipping through geometry
+- ✅ Mantle onto a 1.2m and a 2.4m ledge; zipline traverses the full 220m; slide preserves ≥80% of entry speed for 0.6s
+- ✅ `tools/peek-test` runs green against a stub bot (§5.3)
 - ✅ **Gate: is moving and shooting fun with zero content?** If no, iterate here. Do not proceed.
 
-### M1 — Sim Core *(1–2 sessions)*
-Extract everything into `packages/sim`. Fixed 30Hz tick. Seeded RNG. Client becomes a pure renderer of sim state.
-- ✅ `tick()` has zero imports from THREE/DOM
-- ✅ Same seed + same input log → byte-identical state after 10,000 ticks (`replay-diff`)
+> **Why movement tech moved into M0.** P3 calls it "the primary clip source" and §4.1 makes both the roof layer and the MID PIT exit depend on it — yet no milestone criterion anywhere mentioned mantle, zipline or slide, so §13's "pick the task that advances the current milestone's criteria" would never have selected them. They are the same capsule controller as dash and cost a fraction here of what they cost retrofitted after prediction exists (a zipline is attached remote-player movement, which is precisely the M4 problem).
+
+### M1 — Sim Core *(3–4 sessions)*
+Extract everything into `packages/sim`. Fixed 60Hz tick. Stateless derived RNG. Client becomes a pure renderer of sim state. **The determinism harness is the real work here, not the extraction.**
+- ✅ `tick()` has zero imports from THREE/DOM — **enforced by the CI purity lint**, not by inspection
+- ✅ Same seed + same input log → **identical 10,000-tick state hash in Node 22, Chrome and Firefox**, run in CI via Playwright
+- ✅ `mathd.ts` lands and the `Math.*` ban is green
+- ✅ Physics gate: 10,000 randomized capsule sweeps and 10,000 randomized projectile sweeps through THE STRIP with zero tunneling and zero stuck states
+- ✅ `.ovr` written and read as `{seed, build_hash, balance_hash, input_log}`
 - ✅ Sim runs headless in Node
 
-### M2 — Lane *(1–2 sessions)*
+> **Why the determinism criterion changed.** The original ran in Node only — one engine — so it passed while the property it guards went untested until M6 needs Firefox. Deferring the numeric decision to M4 means re-deriving every constant in `balance.ts` against a new numeric type after 12 abilities are already written against the old one.
+
+### M2 — Lane *(3–4 sessions)*
 Load THE STRIP. Trooper waves, pathing, tower aggro, structure damage. Soul orbs with claim/deny.
 - ✅ Wave spawns every 25s, walks to enemy tower, engages
-- ✅ Orbs drop, claim and deny both function, 2.5s expiry
-- ✅ Towers target nearest trooper, switch to hero on hero-damages-ally
+- ✅ Orbs drop, claim and deny both function, expire correctly, **ownership resolves per §7.1**
+- ✅ Towers target nearest trooper, switch to hero on hero-damages-allied-**hero** in tower range
+- ✅ Every roof is reachable from ground within 8s from three named spawn positions
 - ✅ Match ends when a core dies
 
-### M3 — Combat & Bots *(2–3 sessions)*
+### M3 — Combat & Bots *(6–9 sessions)*
 All 4 heroes with full kits. Bots. Full economy including upgrades and bounties. **Playable 3v3 vs bots, start to finish.**
 - ✅ A complete match is winnable and loseable against bots
-- ✅ TTK measured at 1.2–2.0s in `headless-bench`
+- ✅ TTK inside band as an **analytic unit test over `balance.ts`** (HP ÷ DPS at a defined item tier), with `headless-bench` as the secondary empirical distribution
+- ✅ Bot target acquisition is gated on `canSee()` plus an audio channel — **not** on raw `WorldState`
 - ✅ All 12 upgrades functional with visible model changes
+- ✅ `packages/telemetry` emits the Q1 camera-toggle events
 - ✅ **Gate: play 10 matches. Is it addictive solo? If no, fix the design before networking.**
 
-### M4 — Netcode *(3–4 sessions — the hard one)*
-Authoritative server. Prediction + reconciliation. Lag compensation. Room manager.
-- ✅ 3v3 online, playable at 80ms RTT with no visible rubber-banding
-- ✅ Playable at 150ms with 2% packet loss
+> **Why TTK moved to an analytic test.** Measured TTK in a bot bench is dominated by bot aim error, which is a single tunable parameter — so a RALPH loop asked to hit a measured TTK number will hit it the cheap way, by tuning the bots, and the weapons will never be checked.
+
+### M4 — Netcode *(8–12 sessions — the hard one)*
+Authoritative server. Prediction + reconciliation. Lag compensation. Room manager. **Build `tools/netsim` first.**
+- ✅ Reconciliation corrections >0.25m occur <2/min at 80ms/0% loss, and <6/min at 150ms/2% loss
+- ✅ p95 correction magnitude <0.4m
+- ✅ Replaying a scripted input log through the offline sim and the online client at 0/80/150ms produces **hit-registration counts matching within 1%** — this is "shooting feels identical," made automatable, which §10.3's purity contract is exactly what buys you
 - ✅ Bandwidth within budget
-- ✅ Shooting feels identical online and offline (this is the real test)
+- ✅ Two browsers on different networks land in the same match from a single pasted URL, no account, no install
+- ✅ A client that closes its tab is replaced by a bot within 3s and can reclaim its slot for 120s
 
-### M5 — Objective & Match Flow *(1 session)*
-MID PIT boss + steal. SURGE. Sudden death. Full match lifecycle: lobby → hero select → match → scoreboard → rematch.
+> Three of the four original criteria needed a WAN emulator and a human, and no such tool existed in the §10.2 tree — so an agent would have validated over localhost, where RTT is ~0, and reported success.
 
-### M6 — Viral Layer *(2 sessions)*
-Clip buffer, killcam, announcer, Play of the Match, spectator, OBS overlay.
+### M5 — Objective & Match Flow *(2–3 sessions)*
+MID PIT boss + steal. SURGE. Sudden death. Minimap pings. Full match lifecycle: lobby → hero select → match → scoreboard → rematch.
+- ✅ Boss last-hit awards the full reward to the last-hitting team in 100/100 seeded headless trials, **including cross-team steals**
+- ✅ SURGE arms and disarms exactly at its thresholds, and **reaches its own exit condition** in ≥80% of seeded comeback scenarios
+- ✅ Sudden death resolves every match by 15:00 + 90s, including the draw case
+- ✅ 100 lobby → match → rematch cycles complete headless with no leaked rooms
+
+> M5 was the only milestone with **zero** ✅ lines, which meant §13's "never advance until every criterion passes programmatically" passed it by construction.
+
+### M6 — Viral Layer *(5–6 sessions, having taken `.ovr` at M1)*
+Killcam, announcer, Play of the Match, replay links, director cam, OBS overlay.
 - ✅ Auto-clip fires correctly on all trigger conditions
-- ✅ MP4 export works in Chrome and Firefox
+- ✅ **A playtester produces a link a stranger opens and watches in under 6 seconds, with no install**
+- ✅ MP4 in Chrome, WebM in Firefox
 - ✅ **Gate: watch a recorded match with someone who has never seen the game. Can they follow it?**
 
-### M7 — Feel Pass *(2 sessions)*
+> The original M6 bundled eleven separable subsystems at 2 sessions. Defining `.ovr` as an input log at M1 removes the ring buffer, the format work and most of the player from this milestone. Spectator auto-director and the 60s delayed stream move to `BACKLOG.md`.
+
+### M7 — Feel Pass *(3–4 sessions)*
 Screenshake, hitmarkers, hit sounds, recoil curves, audio mix, particle polish, UI juice. Nothing new — everything existing made 30% better.
 - ✅ Every single player action has audio + visual feedback within 50ms
 
+> **This milestone hard-blocks on ~60–80 audio assets that nothing in the plan produces**, and §11's "use a placeholder after 2 hours" escape hatch is scoped to *art* only. Name the source before M7 starts: procedural synthesis committed into the repo, a licensed pack, or a named human. §9.3's 5%-roll announcer variants are half the VO line count for 5% of the plays — they are already in `BACKLOG.md`.
+
 ### M8 — Playtest & Balance *(ongoing)*
-1000 headless bot matches → CSV → tune `balance.ts` → repeat. Then 20 humans.
-- ✅ Hero win rates 48–52%
+15,000 headless bot matches → CSV → tune `balance.ts` → repeat. Then 20 humans.
+- ✅ Per-comp win rate 45–55%, and per-hero **in-team soul share and damage share** 30–37% each
 - ✅ Median match length 10–14 min
 - ✅ <8% of matches decided before 6:00
+- ✅ **Passive trickle ≤25% of median per-player income** (P2, enforced)
+
+> **Why the balance gate changed shape.** With 4 heroes filling 3 of 6 slots, a given hero is on *both* teams in 9/16 of random comps — those matches are 50% by construction — so only ~375 of 1,000 matches are informative per hero, giving SE 2.58pp and failing a perfectly balanced hero 44% of the time. Per-hero win rate is close to unmeasurable at this roster size; in-team share is not.
 
 ---
 
@@ -503,11 +610,11 @@ Screenshake, hitmarkers, hit sounds, recoil curves, audio mix, particle polish, 
 
 For each iteration:
 
-1. **Read** `PRD.md` + `STATE.md` (current milestone, last failure, next task)
+1. **Read** `PRD.md` + `STATE.md` (current milestone, per-criterion status, per-gate iteration counter, last failure, next task)
 2. **Pick** the single smallest task that advances the current milestone's acceptance criteria
 3. **Implement** in the smallest number of files possible
-4. **Verify** — run `pnpm test`, `pnpm bench`, `pnpm determinism`
-5. **Record** result in `STATE.md`, append learnings to `DECISIONS.md`
+4. **Verify** — run `pnpm test`, `pnpm bench`, `pnpm determinism`, `pnpm lint` (the lint includes the sim purity guard)
+5. **Record** result in `STATE.md` — **including incrementing the gate's iteration counter** — and append learnings to `DECISIONS.md`
 6. **Never** advance a milestone until every ✅ criterion passes programmatically
 
 **Hard constraints for the agent:**
@@ -515,12 +622,16 @@ For each iteration:
 - Never modify `packages/sim` in a way that breaks the determinism test
 - Never tune balance outside `balance.ts`
 - Never add a feature not in this PRD — append to `BACKLOG.md` instead
-- If `headless-bench` regresses any perf budget, revert and reconsider
+- If `perf-harness` or `headless-bench` regresses any perf budget, revert and reconsider
 
 **Kill criteria — stop and escalate to a human if:**
 - M0's fun gate fails after 3 iterations → the core is wrong
-- M4 can't hit 80ms playability after 6 iterations → transport needs rethinking
-- Match length variance exceeds ±6 min at M8 → the economy is broken
+- M4 shows **no improvement in p95 correction magnitude across 3 consecutive sessions** → transport needs rethinking
+- Match length variance exceeds ±3 min at M8 → the economy is broken
+
+> Two of these were unenforceable or miscalibrated as written. Nothing persisted an iteration counter across a context reset, so a fresh session had no way to know whether it was on iteration 2 or 7 — hence the counter in `STATE.md`. And "M4 can't hit 80ms after 6 iterations" was a 6-iteration budget on a milestone that is realistically 8–12 sessions, so it fired during normal progress; a trend test is the right shape. The M8 tolerance tightened from ±6 min because ±6 admits an 18-minute match, which the 15:00 sudden-death escalation is supposed to make impossible.
+
+**Before iteration 1 can run at all**, these must exist — the loop reads or invokes every one of them and none were specified: `pnpm-workspace.yaml` + root `package.json` with the four scripts actually wired; `STATE.md` with its fixed schema; `DECISIONS.md`; `BACKLOG.md` seeded from §16 so a second competing list never appears; `balance.ts` populated from this document; the CI purity lint; `tools/replay-diff` with a canonical state serializer and a golden hash file; and the `headless-bench` CSV schema, since M3, M8 and §10.6 all read it.
 
 ---
 
@@ -529,7 +640,12 @@ For each iteration:
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Netcode eats the whole timeline | **High** | Sim-first architecture means M0–M3 are fully playable with zero networking. If M4 stalls, you still have a shippable single-player-vs-bots game. |
-| TPS peek advantage makes FPS dead | High | Head-authoritative visibility gating (§5.3) + automated regression test |
+| **Cross-engine float determinism fails** | **High** | *This was the highest-risk unknown the original table omitted — and it invalidates the mitigation for the row above.* `mathd.ts` + the `Math.*` ban + a tri-engine M1 gate. Decided at M1, not discovered at M4. |
+| **~80 audio assets have no source** | **High** | M7's sole criterion hard-blocks on them and §11's placeholder escape hatch covers art only. Name the source (procedural / licensed pack / human) before M7 opens. |
+| **Human-gate scheduling** | Medium | M0, M3 and M6 gates plus 20 testers on a game that needs 6 simultaneous humans. M3's 10-match gate is deliberate and stays; everything else gets a bot-measurable proxy from `headless-bench`. |
+| TPS peek advantage makes FPS dead | High | Head-authoritative visibility gating (§5.3) + automated regression test **with the spread penalty forced equal on both arms**, ≥2,000 duels/arm |
+| **Client holds occluded enemy positions** | Medium | The fix for the row above is also a wallhack surface: drawing the 0.4s silhouette needs the transform, and §1.4 forbids client anti-cheat. Gate in the snapshot encoder (§5.3), send 0.5m-quantized ghosts. Residual risk accepted. |
+| **One leaver ends a 3v3** | Medium | Bot takeover within 3s inheriting position/souls/upgrades, slot reclaimable for 120s (§9.7). No accounts means no leaver penalty is constructible. |
 | MOBA complexity creeps back in | High | Hard caps: 4 heroes, 12 upgrades, 3 slots, 1 lane. Everything else → `BACKLOG.md`. |
 | Empty lobbies kill it | High | Bot backfill is invisible and always available. The game is never unplayable. |
 | Browser perf ceiling | Medium | Low-poly is a design pillar, not a fallback. Budgets enforced in CI. |
@@ -541,7 +657,7 @@ For each iteration:
 ## 15. Success criteria
 
 **MVP is done when:**
-1. Three humans can play a full 3v3 online match with sub-100ms feel
+1. **Six** humans can play a full 3v3 online match with sub-100ms feel *(the original said three, which is one team — a 3v3 needs six)*
 2. Median match length lands 10–14 min
 3. 10 external playtesters average ≥3 matches in one sitting without being asked
 4. At least one playtester clips something and shares it unprompted — **this is the real bar**
@@ -560,8 +676,11 @@ Ranked, evaluate only after MVP validates:
 6. WebRTC transport for sub-50ms
 7. Native wrapper (Tauri) for Steam
 8. Cosmetics + monetization
-9. Replay sharing site (clip feed — potentially the real growth engine)
+9. Replay sharing **site** (clip feed — potentially the real growth engine). *Note: the basic share link is no longer here — it moved into M6 as §9.1's `GET /r/<id>`, because success criterion 4 was otherwise gated on a backlogged system. What remains backlogged is the feed, browse and discovery layer.*
 10. Mobile spectator app
+11. Spectator auto-director mode *(moved out of M6)*
+12. 60s delayed spectator stream *(moved out of M6 — a second server-side stream path with its own memory cost)*
+13. Announcer rare variants at 5% roll *(moved out of M6 — half the VO line count for 5% of plays)*
 
 ---
 
@@ -569,7 +688,7 @@ Ranked, evaluate only after MVP validates:
 
 | # | Question | Recommendation |
 |---|---|---|
-| Q1 | Does the FPS/TPS toggle survive contact with real players, or does everyone just pick one and never switch? | Instrument it from M3. If <15% of players toggle mid-fight, reduce it to hold-ADS only and stop calling it a pillar. |
+| Q1 | Does the FPS/TPS toggle survive contact with real players, or does everyone just pick one and never switch? | Instrument it from M3 via `packages/telemetry` — **the mechanism has to exist for the question to be answerable**, and it did not appear in any milestone. If <15% of players toggle mid-fight, reduce it to hold-ADS only and stop calling it a pillar. Note this reading was confounded until §5.1's ×1.4 TPS penalty was removed: with it, nobody toggled for reasons unrelated to preference. |
 | Q2 | Is 3v3 too few for teamfight spectacle? | Ship 3v3. It's the fastest path to a fun match. Test 4v4 at M8 by changing one constant. |
 | Q3 | Should souls persist on death? | Currently −10% capped at 200. Test 0% and −25% in headless bench; pick by comeback frequency. |
 | Q4 | Browser-only, or Steam? | Browser for viral distribution and zero-friction playtesting. Tauri wrapper later if it takes. |
