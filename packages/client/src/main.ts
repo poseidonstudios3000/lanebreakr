@@ -15,6 +15,7 @@ import {
 import { Scene } from './render/scene.js';
 import { Input } from './input/input.js';
 import { CameraRig } from './input/camera.js';
+import { AudioEngine } from './audio/audio.js';
 
 const MM = 1000;
 const HERO_ID = 0;
@@ -26,10 +27,19 @@ const scene = new Scene(document.body, world);
 const input = new Input(scene.renderer.domElement, world.map.spawn.yaw);
 const rig = new CameraRig();
 
+const audio = new AudioEngine();
+
 const startEl = document.getElementById('start')!;
 startEl.addEventListener('click', () => {
+  audio.init(); // must be inside a user gesture, or the browser refuses
   input.requestLock();
   startEl.classList.add('hidden');
+});
+addEventListener('keydown', (e) => {
+  if (e.code === 'KeyM') {
+    audio.muted = !audio.muted;
+    if (audio.muted) audio.stopLoop('zip');
+  }
 });
 document.addEventListener('pointerlockchange', () => {
   if (!input.locked) startEl.classList.remove('hidden');
@@ -64,6 +74,39 @@ const frameTimes: number[] = [];
 let fps = 0;
 let frameP99 = 0;
 let hitmarkTimer = 0;
+
+/**
+ * Audio is driven entirely off sim state transitions, never off input. That
+ * way the sound and the simulation cannot disagree — if you hear a dash, a
+ * dash happened; if the sim refused the dash (no charges, on cooldown), you
+ * hear nothing, which is itself the feedback. Wiring sound to keypresses is
+ * how games end up with a reload noise that plays when the reload was ignored.
+ */
+interface AudioPrev {
+  moveState: number;
+  ammo: number;
+  reloadTicks: number;
+  camera: number;
+  ads: boolean;
+  grounded: boolean;
+  dashCharges: number;
+  targetsAlive: number;
+  stepAccum: number;
+  stepFoot: number;
+}
+
+const prevAudio: AudioPrev = {
+  moveState: -1,
+  ammo: COMBAT.SMG.MAG_SIZE,
+  reloadTicks: 0,
+  camera: -1,
+  ads: false,
+  grounded: true,
+  dashCharges: MOVEMENT.DASH_CHARGES,
+  targetsAlive: 0,
+  stepAccum: 0,
+  stepFoot: 0,
+};
 
 let acc = 0;
 let last = performance.now();
@@ -132,6 +175,9 @@ function frame(now: number): void {
     }
   }
 
+  audio.setListener(ix, iy + ENTITY.EYE_HEIGHT_M, iz, input.quantisedYawRad);
+  updateAudio(pendingEvents, dt, ix, iy, iz);
+
   scene.update(dt);
   scene.render();
 
@@ -141,6 +187,95 @@ function frame(now: number): void {
 
   updateCrosshair(viewPitch);
   updateHud(frameMs);
+}
+
+function updateAudio(events: readonly HitEvent[], dt: number, hx: number, hy: number, hz: number): void {
+  if (!audio.ready) return;
+
+  // --- weapon --------------------------------------------------------------
+  if (hero.ammo < prevAudio.ammo) {
+    // Slight per-shot pitch variation: twelve identical samples a second reads
+    // as a loop rather than as a gun.
+    audio.play('shot', { rate: 0.97 + Math.random() * 0.06, gain: 0.85 });
+    audio.play('shotTail', { gain: 0.5 });
+  }
+
+  for (const e of events) {
+    if (e.geometry) {
+      audio.play('impact', { pos: e, rate: 0.9 + Math.random() * 0.2 });
+    } else {
+      audio.play(e.headshot ? 'headshot' : 'hit', { pos: e });
+      if (e.killed) audio.play('kill', { gain: 0.9 });
+    }
+  }
+
+  // --- reload: three beats, not one blob -----------------------------------
+  if (hero.reloadTicksLeft > 0 && prevAudio.reloadTicks === 0) {
+    audio.play('magOut');
+    const t = hero.reloadTicksLeft;
+    setTimeout(() => audio.play('magIn'), (t * 0.45 * 1000) / SPINE.SIM_HZ);
+    setTimeout(() => audio.play('charge'), (t * 0.82 * 1000) / SPINE.SIM_HZ);
+  }
+
+  // --- movement ------------------------------------------------------------
+  if (hero.dashCharges < prevAudio.dashCharges) audio.play('dash');
+
+  if (hero.moveState !== prevAudio.moveState) {
+    if (hero.moveState === 3 /* Slide */) audio.play('slide');
+    if (hero.moveState === 4 /* Mantle */) audio.play('mantle');
+    if (hero.moveState === 5 /* Zipline */) {
+      audio.play('zipAttach');
+      audio.startLoop('zip', 'zipRide', 0.5);
+    }
+    if (prevAudio.moveState === 5) audio.stopLoop('zip');
+  }
+
+  if (prevAudio.grounded && !hero.grounded && hero.moveState === 1 /* Air */) {
+    audio.play('jump', { gain: 0.7 });
+  }
+  if (!prevAudio.grounded && hero.grounded) {
+    const impact = Math.min(1, Math.abs(hero.vy / 1000) / 12 + 0.35);
+    audio.play('land', { gain: impact });
+  }
+
+  // Footsteps by distance travelled, not by a timer — so they stay in step
+  // with actual speed instead of drifting when you strafe or slow down.
+  const speed = Math.sqrt((hero.vx / MM) ** 2 + (hero.vz / MM) ** 2);
+  if (hero.grounded && hero.moveState === 0 /* Ground */ && speed > 1.2) {
+    prevAudio.stepAccum += speed * dt;
+    if (prevAudio.stepAccum >= 2.1) {
+      prevAudio.stepAccum = 0;
+      prevAudio.stepFoot ^= 1;
+      audio.play('step', {
+        rate: prevAudio.stepFoot ? 1.0 : 0.92, // alternate feet
+        gain: 0.55 + (speed / MOVEMENT.BASE_SPEED_MPS) * 0.35,
+      });
+    }
+  } else {
+    prevAudio.stepAccum = 1.6; // land already mid-stride
+  }
+
+  // --- camera --------------------------------------------------------------
+  if (hero.camera !== prevAudio.camera && prevAudio.camera !== -1) audio.play('camera');
+  const adsNow = hero.adsTicks > CAMERA.ADS_ENTER_TICKS * 0.5;
+  if (adsNow !== prevAudio.ads) audio.play(adsNow ? 'adsIn' : 'adsOut');
+
+  // --- targets -------------------------------------------------------------
+  let alive = 0;
+  for (const t of world.state.targets) if (t.alive) alive++;
+  if (alive > prevAudio.targetsAlive) {
+    audio.play('respawn', { gain: 0.5 });
+  }
+
+  prevAudio.moveState = hero.moveState;
+  prevAudio.ammo = hero.ammo;
+  prevAudio.reloadTicks = hero.reloadTicksLeft;
+  prevAudio.camera = hero.camera;
+  prevAudio.ads = adsNow;
+  prevAudio.grounded = hero.grounded;
+  prevAudio.dashCharges = hero.dashCharges;
+  prevAudio.targetsAlive = alive;
+  void hx; void hy; void hz;
 }
 
 function updateCrosshair(_viewPitch: number): void {

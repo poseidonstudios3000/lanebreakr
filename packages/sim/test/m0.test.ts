@@ -1,15 +1,20 @@
 import { describe, it, expect } from 'vitest';
 import { createWorld, tick, createHero, type World } from '../src/world.js';
-import { Btn, MoveState, type PlayerInput } from '../src/types.js';
+import { Btn, MoveState, CameraMode, type PlayerInput } from '../src/types.js';
+import { currentSpreadDeg } from '../src/systems/combat.js';
 import { MOVEMENT, COMBAT, CAMERA, SPINE, M0 } from '../src/balance.js';
 
 /**
- * A firing lane with no geometry in it. The grey box is deliberately dense —
- * cover at z = ±6 and ±12, the peek-test corner spanning z ∈ [−5, 5], the pit
- * at |x|,|z| < 12 — so a combat test that picks a lane by accident measures
- * the wall, not the weapon. z = 24 is clear from x = −38 to +38.
+ * A firing lane with no geometry in it, running from x = −38 to x = 0.
+ *
+ * The grey box is deliberately dense — cover at z = ±6 and ±12, the peek
+ * corner spanning z ∈ [−5, 5], the pit at |x|,|z| < 12, the mantle stack at
+ * z ∈ [−19, −13], and the zipline towers at z ∈ [19.5, 24.5]. A combat test
+ * that picks a lane by eye ends up measuring a wall instead of a weapon, which
+ * has now happened twice — hence assertLaneClear() below, so the next time it
+ * happens the failure says so instead of reporting zero damage.
  */
-const LANE_Z = 24;
+const LANE_Z = 15;
 
 /**
  * PRD §12/M0 acceptance criteria, as executable assertions.
@@ -27,6 +32,21 @@ function input(over: Partial<PlayerInput> = {}): PlayerInput {
 
 function run(w: World, n: number, mk: (t: number) => PlayerInput): void {
   for (let t = 0; t < n; t++) tick(w, [mk(t)]);
+}
+
+/** Fails loudly, and with the offending box, if the firing lane is obstructed. */
+function assertLaneClear(w: World, fromX: number, toX: number, y = 1.45): void {
+  for (const b of w.map.boxes) {
+    const blocks =
+      b.minY <= y && b.maxY >= y &&
+      b.minZ <= LANE_Z && b.maxZ >= LANE_Z &&
+      b.maxX >= fromX && b.minX <= toX;
+    expect(
+      blocks,
+      `firing lane z=${LANE_Z}, x∈[${fromX}, ${toX}] is blocked by box ` +
+        `x[${b.minX}, ${b.maxX}] y[${b.minY}, ${b.maxY}] z[${b.minZ}, ${b.maxZ}]`,
+    ).toBe(false);
+  }
 }
 
 function settled(): World {
@@ -146,6 +166,7 @@ describe('M0 — combat', () => {
 
     // Stand still 15m away (the SMG bench distance) on the target's −X side,
     // looking straight at it. Spread still applies; that is the point.
+    assertLaneClear(w, -16, 1);
     t.px = 0; t.py = 0; t.pz = LANE_Z * MM; t.vx = 0;
     h.px = -15 * MM;
     h.py = Math.round(0.05 * MM);
@@ -200,6 +221,7 @@ describe('M0 — combat', () => {
     const h = w.state.heroes[0]!;
     const t = w.state.targets[0]!;
 
+    assertLaneClear(w, -39, 1);
     t.px = 0; t.py = 0; t.pz = LANE_Z * MM; t.vx = 0;
 
     const damageAt = (dist: number): number => {
@@ -266,6 +288,108 @@ describe('M0 — camera', () => {
 
   it('TPS carries no hipfire accuracy penalty (§5.1 rework)', () => {
     expect(CAMERA.TPS_HIPFIRE_SPREAD_MULT).toBe(1.0);
+  });
+
+  it('§5.2: holding ADS from TPS auto-enters FPS, releasing restores TPS', () => {
+    const w = settled();
+    const h = w.state.heroes[0]!;
+    expect(h.camera).toBe(CameraMode.TPS);
+
+    tick(w, [input({ buttons: Btn.Ads })]);
+    expect(h.camera).toBe(CameraMode.FPS);
+
+    run(w, 20, () => input({ buttons: Btn.Ads }));
+    expect(h.camera).toBe(CameraMode.FPS);
+    expect(h.adsTicks).toBeGreaterThan(0);
+
+    tick(w, [input()]); // release
+    expect(h.camera).toBe(CameraMode.TPS);
+  });
+
+  it('§5.2: holding ADS from FPS leaves you in FPS on release', () => {
+    const w = settled();
+    const h = w.state.heroes[0]!;
+    tick(w, [input({ buttons: Btn.CameraToggle })]);
+    expect(h.camera).toBe(CameraMode.FPS);
+
+    tick(w, [input({ buttons: Btn.Ads })]);
+    run(w, 10, () => input({ buttons: Btn.Ads }));
+    tick(w, [input()]);
+    expect(h.camera).toBe(CameraMode.FPS);
+  });
+
+  it('a V press during ADS wins over the release restore', () => {
+    const w = settled();
+    const h = w.state.heroes[0]!;
+    tick(w, [input({ buttons: Btn.Ads })]);
+    expect(h.camera).toBe(CameraMode.FPS);
+    // Player explicitly toggles back to TPS while still holding the mouse.
+    tick(w, [input({ buttons: Btn.Ads | Btn.CameraToggle })]);
+    expect(h.camera).toBe(CameraMode.TPS);
+    expect(h.adsPriorCamera).toBe(-1); // the pending restore is discarded
+
+    run(w, 5, () => input({ buttons: Btn.Ads }));
+    tick(w, [input()]); // release must NOT drag them back to FPS
+    expect(h.camera).toBe(CameraMode.TPS);
+  });
+
+  it('ADS actually narrows the spread cone', () => {
+    const w = settled();
+    const h = w.state.heroes[0]!;
+    const hip = currentSpreadDeg(h);
+    tick(w, [input({ buttons: Btn.Ads })]);
+    run(w, CAMERA.ADS_ENTER_TICKS + 2, () => input({ buttons: Btn.Ads }));
+    expect(currentSpreadDeg(h)).toBeLessThan(hip * 0.6);
+  });
+});
+
+describe('M0 — map reachability', () => {
+  it('the pit is actually a hole, not filled-in floor', () => {
+    // The first build laid a solid floor across the arena and *then* built rim
+    // slabs around a hole, so the hole was filled in and the pit target was
+    // embedded in ground.
+    const w = createWorld(5);
+    const h = w.state.heroes[0]!;
+    h.px = 0; h.py = 6 * MM; h.pz = 0; h.vx = 0; h.vy = 0; h.vz = 0;
+    run(w, 200, () => input());
+    expect(h.py / MM).toBeLessThan(-1.0); // came to rest on the pit floor
+    expect(h.grounded).toBe(true);
+  });
+
+  it('every zipline anchor is reachable by mantling from the ground', () => {
+    // Anchors sit at 7.5m with a 3m attach radius against a 1.18m jump apex.
+    // Without an access route they are decorative — which is what shipped.
+    const w = createWorld(5);
+    for (const zl of w.map.ziplines) {
+      for (const [ax, az] of [[zl.ax, zl.az], [zl.bx, zl.bz]] as const) {
+        // Something standable must exist within the attach radius, directly
+        // under the anchor, at a height a mantle chain can reach.
+        const support = w.map.boxes.some(
+          (b) =>
+            ax >= b.minX - 0.4 && ax <= b.maxX + 0.4 &&
+            az >= b.minZ - 0.4 && az <= b.maxZ + 0.4 &&
+            b.maxY >= zl.ay - MOVEMENT.ZIPLINE_ATTACH_RANGE_M &&
+            b.maxY < zl.ay,
+        );
+        expect(support, `no access under anchor (${ax}, ${az})`).toBe(true);
+      }
+    }
+  });
+
+  it('the access stack climbs in steps a mantle can take', () => {
+    const w = createWorld(5);
+    const zl = w.map.ziplines[0]!;
+    const near = w.map.boxes
+      .filter((b) => Math.abs((b.minX + b.maxX) / 2 - zl.ax) < 9 && Math.abs((b.minZ + b.maxZ) / 2 - zl.az) < 4)
+      .map((b) => b.maxY)
+      .filter((y) => y > 0.1)
+      .sort((a, b) => a - b);
+    expect(near.length).toBeGreaterThanOrEqual(3);
+    let prev = 0;
+    for (const y of near) {
+      expect(y - prev, `step of ${(y - prev).toFixed(2)}m exceeds mantle height`).toBeLessThanOrEqual(MOVEMENT.MANTLE_MAX_HEIGHT_M);
+      prev = y;
+    }
   });
 });
 

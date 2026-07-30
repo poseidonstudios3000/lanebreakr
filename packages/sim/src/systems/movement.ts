@@ -70,8 +70,38 @@ export function stepMovement(
   if (pressed(input, prevButtons, Btn.CameraToggle)) {
     h.camera = h.camera === CameraMode.TPS ? CameraMode.FPS : CameraMode.TPS;
     h.cameraLerp = CAMERA.TRANSITION_TICKS;
+    // An explicit V press overrides any pending ADS restore: the player has
+    // stated a preference, so releasing the mouse must not undo it.
+    h.adsPriorCamera = -1;
   }
+
   const adsHeld = (input.buttons & Btn.Ads) !== 0;
+  const adsPressed = pressed(input, prevButtons, Btn.Ads);
+  const adsReleased = !adsHeld && (prevButtons & Btn.Ads) !== 0;
+
+  /**
+   * §5.2: "Right Mouse (hold) — auto-enters FPS + ADS. Releasing returns to
+   * your prior mode."
+   *
+   * This is the reason the toggle can be an advanced-player tool rather than a
+   * required one: a player who never learns V still gets the whole FPS half of
+   * the game, automatically, on the button they were already going to hold.
+   * Without it, ADS in TPS does nothing at all, since ADS is FPS-only.
+   */
+  if (adsPressed && h.adsPriorCamera < 0) {
+    h.adsPriorCamera = h.camera;
+    if (h.camera === CameraMode.TPS) {
+      h.camera = CameraMode.FPS;
+      h.cameraLerp = CAMERA.TRANSITION_TICKS;
+    }
+  } else if (adsReleased && h.adsPriorCamera >= 0) {
+    if (h.camera !== h.adsPriorCamera) {
+      h.camera = h.adsPriorCamera === CameraMode.FPS ? CameraMode.FPS : CameraMode.TPS;
+      h.cameraLerp = CAMERA.TRANSITION_TICKS;
+    }
+    h.adsPriorCamera = -1;
+  }
+
   if (adsHeld && h.moveState !== MoveState.Dash) {
     if (h.adsTicks < CAMERA.ADS_ENTER_TICKS) h.adsTicks++;
   } else if (h.adsTicks > 0) {

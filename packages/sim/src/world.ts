@@ -30,7 +30,7 @@ export function createHero(id: number, x: number, y: number, z: number, yaw: num
     hp: SPINE.HERO_BASE_HP * SPINE.DAMAGE_SCALE,
     maxHp: SPINE.HERO_BASE_HP * SPINE.DAMAGE_SCALE,
     moveState: MoveState.Air, grounded: false, groundedTick: -999, jumpBufferedTick: -999,
-    camera: CameraMode.TPS, cameraLerp: 0, adsTicks: 0,
+    camera: CameraMode.TPS, cameraLerp: 0, adsTicks: 0, adsPriorCamera: -1,
     dashCharges: MOVEMENT.DASH_CHARGES, dashRechargeTicks: 0, dashTicksLeft: 0,
     dashCooldownTicks: 0, iframeTicksLeft: 0, dashDirX: 0, dashDirZ: 0,
     slideTicksLeft: 0, slideCooldownTicks: 0,

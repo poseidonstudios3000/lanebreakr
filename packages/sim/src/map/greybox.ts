@@ -34,8 +34,10 @@ const WALL = M0.ARENA_WALL_HEIGHT_M;
 export function buildGreybox(): GreyboxMap {
   const boxes: Aabb[] = [];
 
-  // Floor, thick enough that nothing tunnels through it at any speed.
-  boxes.push(aabb(-HX - 2, -4, -HZ - 2, HX + 2, 0, HZ + 2));
+  // NOTE: there is deliberately no full-arena floor box here. The four rim
+  // slabs below tile the whole floor *except* the pit, and a solid floor laid
+  // down first would fill the pit back in — which is exactly what it did in
+  // the first build, leaving the pit target embedded in solid ground.
 
   // Perimeter walls.
   boxes.push(aabb(-HX - 2, 0, -HZ - 2, -HX, WALL, HZ + 2));
@@ -72,9 +74,25 @@ export function buildGreybox(): GreyboxMap {
   boxes.push(aabb(-P, -4, P, P, 0, HZ + 2));
   boxes.push(aabb(-P, -4 - D, -P, P, -D, P)); // pit floor
 
+  // --- Zipline access. In the first build the lines hung at 7.5m with a 3m
+  //     attach radius against a 1.18m jump apex and nothing to climb, so they
+  //     were decorative. Each anchor now gets a three-step mantle stack:
+  //     2.0 → 4.0 → 6.0m, every step inside MANTLE_MAX_HEIGHT_M (2.2), which
+  //     also makes the stack itself a mantle-chaining exercise. ---
+  const ZIP_Y = 7.5;
+  function accessTower(cx: number, cz: number, faceX: number): void {
+    boxes.push(box(cx + faceX * 5.0, 0, cz, 3.6, 2.0, 5));
+    boxes.push(box(cx + faceX * 2.6, 0, cz, 2.4, 4.0, 5));
+    boxes.push(box(cx, 0, cz, 3.0, 6.0, 5)); // top: feet at 6.0, line at 7.5
+  }
+  accessTower(-34, -22, 1);
+  accessTower(34, -22, -1);
+  accessTower(34, 22, -1);
+  accessTower(-34, 22, 1);
+
   const ziplines: Zipline[] = [
-    { id: 0, ax: -34, ay: 7.5, az: -22, bx: 34, by: 7.5, bz: -22, length: 68 },
-    { id: 1, ax: 34, ay: 7.5, az: 22, bx: -34, by: 7.5, bz: 22, length: 68 },
+    { id: 0, ax: -34, ay: ZIP_Y, az: -22, bx: 34, by: ZIP_Y, bz: -22, length: 68 },
+    { id: 1, ax: 34, ay: ZIP_Y, az: 22, bx: -34, by: ZIP_Y, bz: 22, length: 68 },
   ];
 
   return {

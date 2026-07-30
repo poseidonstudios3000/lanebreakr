@@ -109,6 +109,8 @@ export interface HeroState {
   /** 0..CAMERA.TRANSITION_TICKS, counts down during the lerp */
   cameraLerp: number;
   adsTicks: number;
+  /** Camera mode to restore when ADS is released; −1 when ADS did not switch it. */
+  adsPriorCamera: number;
 
   dashCharges: number;
   dashRechargeTicks: number;

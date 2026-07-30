@@ -82,9 +82,15 @@ export class Input {
     const k = (c: string): number => (this.keys.has(c) ? 1 : 0);
     const { yaw, pitch } = this.quantise();
 
+    // MouseEvent.button is 0=left, 1=middle, 2=right, so `1 << e.button` gives
+    // left=1, middle=2, right=4. Testing `& 2` for ADS put aim-down-sights on
+    // the middle mouse button and melee on the right — silently, because both
+    // still "worked", just on the wrong fingers.
+    const LEFT = 1, MIDDLE = 2, RIGHT = 4;
+
     let buttons = 0;
-    if (this.mouseButtons & 1) buttons |= Btn.Fire;
-    if (this.mouseButtons & 2) buttons |= Btn.Ads;
+    if (this.mouseButtons & LEFT) buttons |= Btn.Fire;
+    if (this.mouseButtons & RIGHT) buttons |= Btn.Ads;
     if (this.keys.has('Space')) buttons |= Btn.Jump;
     if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) buttons |= Btn.Dash;
     if (this.keys.has('KeyC') || this.keys.has('ControlLeft')) buttons |= Btn.Slide;
@@ -94,7 +100,7 @@ export class Input {
     if (this.keys.has('KeyQ')) buttons |= Btn.AbilityQ;
     if (this.keys.has('KeyE')) buttons |= Btn.AbilityE;
     if (this.keys.has('KeyB')) buttons |= Btn.Buy;
-    if (this.mouseButtons & 4) buttons |= Btn.Melee;
+    if (this.mouseButtons & MIDDLE) buttons |= Btn.Melee;
 
     return {
       seq: this.seq++,
