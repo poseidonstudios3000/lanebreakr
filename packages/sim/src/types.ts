@@ -124,6 +124,8 @@ export interface HeroState {
   slideTicksLeft: number;
   slideCooldownTicks: number;
   mantleTicksLeft: number;
+  /** Duration this mantle was started with — height-derived, so it varies. */
+  mantleTotalTicks: number;
   mantleTargetX: number;
   mantleTargetY: number;
   mantleTargetZ: number;

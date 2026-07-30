@@ -8,7 +8,7 @@
  * precisely the M4 problem).
  */
 
-import { MOVEMENT, ENTITY, CAMERA, SPINE } from '../balance.js';
+import { MOVEMENT, ENTITY, CAMERA, SPINE, mantleDurationTicks } from '../balance.js';
 import { sin, cos, clamp } from '../mathd.js';
 import {
   type HeroState, type PlayerInput, MoveState, CameraMode, Btn,
@@ -200,7 +200,8 @@ export function stepMovement(
     const m = probeMantle(x, y, z, wishX, wishZ, boxes);
     if (m !== null) {
       h.moveState = MoveState.Mantle;
-      h.mantleTicksLeft = MOVEMENT.MANTLE_DURATION_TICKS;
+      h.mantleTicksLeft = mantleDurationTicks(m.y - y);
+      h.mantleTotalTicks = h.mantleTicksLeft;
       h.mantleTargetX = Math.round(m.x * MM);
       h.mantleTargetY = Math.round(m.y * MM);
       h.mantleTargetZ = Math.round(m.z * MM);
@@ -212,7 +213,7 @@ export function stepMovement(
   // ---- integrate ----------------------------------------------------------
   switch (h.moveState) {
     case MoveState.Mantle: {
-      const total = MOVEMENT.MANTLE_DURATION_TICKS;
+      const total = h.mantleTotalTicks;
       const remaining = h.mantleTicksLeft;
       const t = (total - remaining) / total;
       const tx = h.mantleTargetX / MM;

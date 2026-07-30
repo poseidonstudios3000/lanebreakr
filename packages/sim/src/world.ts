@@ -34,7 +34,7 @@ export function createHero(id: number, x: number, y: number, z: number, yaw: num
     dashCharges: MOVEMENT.DASH_CHARGES, dashRechargeTicks: 0, dashTicksLeft: 0,
     dashCooldownTicks: 0, iframeTicksLeft: 0, dashDirX: 0, dashDirZ: 0,
     slideTicksLeft: 0, slideCooldownTicks: 0,
-    mantleTicksLeft: 0, mantleTargetX: 0, mantleTargetY: 0, mantleTargetZ: 0,
+    mantleTicksLeft: 0, mantleTotalTicks: 1, mantleTargetX: 0, mantleTargetY: 0, mantleTargetZ: 0,
     ziplineId: -1, ziplineT: 0, ziplineDir: 1,
     ammo: 32, reloadTicksLeft: 0, fireCooldownTicks: 0, postReloadLockout: 0,
     meleeTicksLeft: 0, meleeCooldownTicks: 0,
