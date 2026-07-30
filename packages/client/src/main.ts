@@ -9,7 +9,7 @@
  */
 
 import {
-  createWorld, tick, SPINE, CAMERA, COMBAT, MOVEMENT, CameraMode,
+  createWorld, tick, fillWithBots, BOT_TIERS, SPINE, CAMERA, COMBAT, MOVEMENT, CameraMode,
   currentSpreadDeg, muzzleBlocked, aimDir, ENTITY, type HitEvent,
 } from '@ovrrun/sim';
 import { Scene } from './render/scene.js';
@@ -28,6 +28,12 @@ const HERO_ID = 0;
  */
 const MODE = new URLSearchParams(location.search).get('map') === 'strip' ? 'strip' : 'greybox';
 const world = createWorld(0xc0ffee, MODE);
+// §10.5: bots are first-class. On THE STRIP every slot but yours is filled, so
+// the lane is contested from the first wave rather than being a walking tour.
+if (MODE === 'strip') {
+  const tierName = (new URLSearchParams(location.search).get('bots') ?? 'normal') as 'easy' | 'normal' | 'hard';
+  fillWithBots(world, [0], BOT_TIERS[tierName] ?? BOT_TIERS.normal);
+}
 const hero = world.state.heroes[0]!;
 
 const scene = new Scene(document.body, world);
@@ -42,7 +48,18 @@ startEl.addEventListener('click', () => {
   input.requestLock();
   startEl.classList.add('hidden');
 });
+/**
+ * Reduced effects. Input scramble plus heavy screen distortion causes real
+ * problems for motion-sensitive and motor-impaired players, and "turn off the
+ * effect" must never mean "turn off the game" — so this drops the distortion
+ * and keeps the mechanical penalty, which the sim owns either way.
+ */
+let reducedEffects = localStorage.getItem('ovrrun.reducedEffects') === '1';
 addEventListener('keydown', (e) => {
+  if (e.code === 'KeyG') {
+    reducedEffects = !reducedEffects;
+    localStorage.setItem('ovrrun.reducedEffects', reducedEffects ? '1' : '0');
+  }
   if (e.code === 'KeyM') {
     audio.muted = !audio.muted;
     if (audio.muted) audio.stopLoop('zip');
@@ -65,6 +82,9 @@ const el = {
   ct: document.getElementById('ct')!,
   cb: document.getElementById('cb')!,
   hitmark: document.getElementById('hitmark')!,
+  glitch: document.getElementById('glitch')!,
+  qcd: document.getElementById('qcd')!,
+  qcdVal: document.getElementById('qcdVal')!,
 };
 
 for (let i = 0; i < MOVEMENT.DASH_CHARGES; i++) {
@@ -98,6 +118,8 @@ interface AudioPrev {
   grounded: boolean;
   dashCharges: number;
   targetsAlive: number;
+  qCooldown: number;
+  glitched: boolean;
   stepAccum: number;
   stepFoot: number;
 }
@@ -111,6 +133,8 @@ const prevAudio: AudioPrev = {
   grounded: true,
   dashCharges: MOVEMENT.DASH_CHARGES,
   targetsAlive: 0,
+  qCooldown: 0,
+  glitched: false,
   stepAccum: 0,
   stepFoot: 0,
 };
@@ -164,7 +188,7 @@ function frame(now: number): void {
   );
 
   scene.syncWorld(world, ix, iy, iz, input.quantisedYawRad, hideHero);
-  if (MODE === 'strip') scene.syncStrip(world, world.state.tick);
+  if (MODE === 'strip') scene.syncStrip(world, world.state.tick, HERO_ID);
 
   if (pendingEvents.length > 0) {
     const [ax, , az] = aimDir(hero.yaw, hero.pitch);
@@ -192,6 +216,17 @@ function frame(now: number): void {
   // --- HUD ------------------------------------------------------------------
   hitmarkTimer -= dt;
   el.hitmark.classList.toggle('on', hitmarkTimer > 0);
+
+  const glitched = hero.glitchTicksLeft > 0;
+  el.glitch.classList.toggle('on', glitched);
+  el.glitch.classList.toggle('reduced', reducedEffects);
+  if (glitched && !reducedEffects) {
+    // Roll the camera while glitched — the world tilting is what sells "your
+    // controls are lying to you" more than any post effect.
+    scene.camera.rotation.z = Math.sin(world.state.tick * 0.9) * 0.05;
+  } else {
+    scene.camera.rotation.z = 0;
+  }
 
   updateCrosshair(viewPitch);
   updateHud(frameMs);
@@ -268,6 +303,20 @@ function updateAudio(events: readonly HitEvent[], dt: number, hx: number, hy: nu
   const adsNow = hero.adsTicks > CAMERA.ADS_ENTER_TICKS * 0.5;
   if (adsNow !== prevAudio.ads) audio.play(adsNow ? 'adsIn' : 'adsOut');
 
+  // --- glitch bomb ---------------------------------------------------------
+  // Cooldown going from 0 to full means the sim ACCEPTED the cast. Wiring this
+  // to the keypress instead would play a throw sound on a refused cast.
+  if (hero.abilityQCooldown > prevAudio.qCooldown) audio.play('glitchThrow', { gain: 0.8 });
+  const glitchedNow = hero.glitchTicksLeft > 0;
+  if (glitchedNow && !prevAudio.glitched) {
+    audio.play('glitchHit', { gain: 1.0 });
+    audio.startLoop('glitch', 'glitchLoop', 0.7);
+  } else if (!glitchedNow && prevAudio.glitched) {
+    audio.stopLoop('glitch');
+  }
+  prevAudio.qCooldown = hero.abilityQCooldown;
+  prevAudio.glitched = glitchedNow;
+
   // --- targets -------------------------------------------------------------
   let alive = 0;
   for (const t of world.state.targets) if (t.alive) alive++;
@@ -320,6 +369,10 @@ function updateHud(frameMs: number): void {
   }
 
   el.modeName.textContent = hero.camera === CameraMode.FPS ? 'FPS' : 'TPS';
+
+  const qReady = hero.abilityQCooldown === 0;
+  el.qcd.classList.toggle('ready', qReady);
+  el.qcdVal.textContent = qReady ? 'GLITCH' : `${(hero.abilityQCooldown / SPINE.SIM_HZ).toFixed(1)}s`;
 
   const acc2 = hero.shotsFired > 0 ? (hero.hitsLanded / hero.shotsFired) * 100 : 0;
   const hs = hero.hitsLanded > 0 ? (hero.headshots / hero.hitsLanded) * 100 : 0;

@@ -26,7 +26,8 @@ type SoundName =
   | 'dash' | 'slide' | 'jump' | 'land' | 'step'
   | 'magOut' | 'magIn' | 'charge'
   | 'zipAttach' | 'zipRide' | 'mantle'
-  | 'camera' | 'adsIn' | 'adsOut' | 'respawn';
+  | 'camera' | 'adsIn' | 'adsOut' | 'respawn'
+  | 'glitchThrow' | 'glitchHit' | 'glitchLoop';
 
 const SR = 48000;
 
@@ -291,6 +292,52 @@ const RECIPES: Record<SoundName, () => Float32Array> = {
 
   adsIn: () => normalise(decay(sine(buf(0.1), 500, 760), 0.07, 2.5), 0.2),
   adsOut: () => normalise(decay(sine(buf(0.1), 760, 500), 0.07, 2.5), 0.16),
+
+  /** Throw: a soft digital blip, then a rising fuse so the fuse is AUDIBLE.
+   *  Being hit has to be a read you lost, and sound is half of the read. */
+  glitchThrow: () => {
+    const out = buf(0.7);
+    mix(out, decay(sine(buf(0.7), 700, 1500), 0.10, 3), 0.30);
+    // The fuse: a stepped rise over the 0.7s arm time.
+    for (let step = 0; step < 6; step++) {
+      const beep = decay(sine(buf(0.7), 900 + step * 130, 900 + step * 130), 0.05, 4, 0.1 + step * 0.1);
+      mix(out, beep, 0.16 + step * 0.03);
+    }
+    return normalise(out, 0.45);
+  },
+
+  /** Detonation, from the victim's side: bit-crushed noise and a pitch dive.
+   *  This should be the most obnoxious two seconds in the game. */
+  glitchHit: () => {
+    const out = buf(0.5);
+    const n = noise(buf(0.5), 1);
+    // Sample-and-hold at ~1.2kHz — the cheapest convincing "digital" texture.
+    const hold = Math.floor(SR / 1200);
+    for (let i = 0; i < n.length; i++) n[i] = n[i - (i % hold)] ?? 0;
+    mix(out, decay(onePoleHP(n, 500), 0.42, 2), 0.85);
+    mix(out, decay(sine(buf(0.5), 1400, 90), 0.30, 2), 0.5);
+    mix(out, decay(sine(buf(0.5), 60, 55), 0.45, 2), 0.35);
+    return normalise(saturate(out, 2.2), 0.8);
+  },
+
+  /** Looped while glitched: an unstable carrier that will not sit still. */
+  glitchLoop: () => {
+    const out = buf(0.4);
+    let phase = 0;
+    for (let i = 0; i < out.length; i++) {
+      const t = i / out.length;
+      const f = 220 + Math.sin(t * 43) * 160 + Math.sin(t * 7) * 60;
+      phase += (2 * Math.PI * f) / SR;
+      out[i] = Math.sin(phase) > 0 ? 0.5 : -0.5; // square: harsher, reads as broken
+    }
+    onePoleLP(out, 2600);
+    const f = Math.floor(SR * 0.02), nn = out.length;
+    for (let i = 0; i < f; i++) {
+      const t = i / f;
+      out[i] = out[i]! * t + out[nn - f + i]! * (1 - t);
+    }
+    return normalise(out, 0.16);
+  },
 
   respawn: () => {
     const out = buf(0.32);

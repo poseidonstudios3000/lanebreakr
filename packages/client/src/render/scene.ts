@@ -209,7 +209,44 @@ export class Scene {
     troopers: [] as THREE.Mesh[],
     orbs: [] as THREE.Mesh[],
     structures: [] as THREE.Group[],
+    heroes: [] as THREE.Group[],
   };
+
+  /**
+   * Other heroes. Silhouette does the work here, not detail: §11 asks for
+   * extreme silhouette differentiation, and at 720p on a stream the shape and
+   * the team colour are the only things that survive compression.
+   */
+  private otherHero(i: number, team: number): THREE.Group {
+    let g = this.pool.heroes[i];
+    if (g === undefined) {
+      g = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.CapsuleGeometry(ENTITY.CAPSULE_RADIUS_M, ENTITY.CAPSULE_HEIGHT_M - ENTITY.CAPSULE_RADIUS_M * 2, 4, 12),
+        new THREE.MeshLambertMaterial({ color: 0x9aa6b2 }),
+      );
+      body.position.y = ENTITY.CAPSULE_HEIGHT_M / 2;
+      const visor = new THREE.Mesh(
+        new THREE.SphereGeometry(ENTITY.HEAD_SPHERE_RADIUS_M * 1.2, 12, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffffff }),
+      );
+      visor.position.y = ENTITY.HEAD_SPHERE_CENTER_M;
+      // A shoulder bar: a plain capsule reads as a pill from every angle, and
+      // "which way is he facing" is information the player needs at a glance.
+      const fin = new THREE.Mesh(
+        new THREE.BoxGeometry(0.9, 0.12, 0.28),
+        new THREE.MeshLambertMaterial({ color: 0xffffff }),
+      );
+      fin.position.set(0, ENTITY.CAPSULE_HEIGHT_M * 0.78, -0.22);
+      g.add(body, visor, fin);
+      this.scene.add(g);
+      this.pool.heroes[i] = g;
+    }
+    const col = team === 0 ? TEAM_A : TEAM_B;
+    ((g.children[1] as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(col);
+    ((g.children[2] as THREE.Mesh).material as THREE.MeshLambertMaterial).color.setHex(col);
+    return g;
+  }
 
   private ensureStrip(world: World): void {
     if (this.pool.structures.length > 0 || world.state.structures.length === 0) return;
@@ -263,9 +300,23 @@ export class Scene {
     return m;
   }
 
-  syncStrip(world: World, tick: number): void {
+  syncStrip(world: World, tick: number, localHeroId: number): void {
     this.ensureStrip(world);
     const s = world.state;
+
+    let hn = 0;
+    for (const o of s.heroes) {
+      if (o.id === localHeroId) continue;
+      const g = this.otherHero(hn++, o.team);
+      g.visible = o.alive;
+      if (!o.alive) continue;
+      g.position.set(o.px / 1000, o.py / 1000, o.pz / 1000);
+      g.rotation.y = -(o.yaw / 8192) * Math.PI * 2;
+      const frac = o.hp / o.maxHp;
+      ((g.children[0] as THREE.Mesh).material as THREE.MeshLambertMaterial)
+        .color.setHex(frac > 0.5 ? 0x9aa6b2 : frac > 0.25 ? 0xb08a7a : 0xc06a5a);
+    }
+    for (let i = hn; i < this.pool.heroes.length; i++) this.pool.heroes[i]!.visible = false;
 
     let n = 0;
     for (const t of s.troopers) {

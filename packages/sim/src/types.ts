@@ -159,6 +159,11 @@ export interface HeroState {
   /** Last movement axes, and how long we have gone without a fresh input.
    *  PRD §10.4: a missing input repeats the last one for <=3 ticks, then zeroes
    *  the movement axes while holding view angles. It NEVER freezes the entity. */
+  /** GLITCH BOMB. `glitchSeed` makes the scramble reproducible under rewind. */
+  glitchTicksLeft: number;
+  glitchSeed: number;
+  abilityQCooldown: number;
+
   /** tick of the last damage taken — gates §6.2's out-of-combat regen */
   lastDamagedTick: number;
   lastMoveX: number;
@@ -321,6 +326,17 @@ export interface SoulEvent {
   z: number;
 }
 
+/** A thrown glitch bomb, between cast and detonation. */
+export interface GlitchState {
+  id: EntityId;
+  team: Team;
+  ownerId: EntityId;
+  px: number;
+  py: number;
+  pz: number;
+  armTicksLeft: number;
+}
+
 export interface WorldState {
   tick: number;
   matchSeed: number;
@@ -330,6 +346,7 @@ export interface WorldState {
   troopers: TrooperState[];
   orbs: OrbState[];
   structures: StructureState[];
+  glitches: GlitchState[];
   /** indexed by Team.A / Team.B; Team.Neutral never has one */
   teams: TeamState[];
   nextWaveTick: number;

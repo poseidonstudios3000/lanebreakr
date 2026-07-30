@@ -801,6 +801,48 @@ export const WORLD = {
 } as const;
 
 // ============================================================================
+// GLITCH BOMB — the tone's first mechanic. See docs/DIRECTION.md §0.
+//
+// "Enemies that are hit cannot use their controls for a few seconds and freak
+// out." The bar it has to clear is that it is FUNNY TO BE HIT BY, not only
+// funny to land — removing control is among the most hated mechanics in games
+// when it is long, unclear or lethal, and among the most beloved when it is
+// short, telegraphed and survivable. Every constant below is that bar:
+// ============================================================================
+export const GLITCH = {
+  COOLDOWN_TICKS: 720, // 12.0s — §6.4's 8–16s active band
+  CAST_TICKS: 12, // 0.20s wind-up, so the throw is committed and readable
+  /** Fuse. The victim gets time to leave; being hit is a read you lost. */
+  ARM_TICKS: 42, // 0.70s
+  MAX_RANGE_M: 28,
+  RADIUS_M: 6.0,
+
+  /** 1.8s. Long enough to lose a duel, short enough not to resent. */
+  DURATION_TICKS: 108,
+  /** Damage is deliberately near-zero: it creates the opening, someone else
+   *  still has to take it. A glitch bomb must never be the thing that killed
+   *  you, only the thing that made you killable. */
+  DAMAGE: 15,
+
+  /** SCRAMBLE, not freeze. A player who can still flail can still get lucky,
+   *  and that near-miss is the clip. */
+  REMAP_INTERVAL_TICKS: 18, // the mapping re-rolls ~3× per glitch
+  /** Aim jitter in milli-degrees per tick while glitched. */
+  AIM_JITTER_MILLIDEG: 900,
+  /** Movement is slowed but never zeroed. */
+  MOVE_MULT: 0.75,
+  /** Firing still works — being unable to shoot back is the un-fun version. */
+  BLOCKS_FIRE: false,
+  BLOCKS_DASH: true, // the dash is the counterplay you are being denied
+
+  /** Accessibility: the mechanical penalty stays, the screen distortion can be
+   *  turned off. Input scramble and heavy chromatic aberration cause real
+   *  problems for motion-sensitive and motor-impaired players, and "turn off
+   *  the effect" must not mean "turn off the game". */
+  REDUCED_EFFECTS_KEEPS_MECHANIC: true,
+} as const;
+
+// ============================================================================
 // M0 TARGET RANGE — the grey box. Not shipped content; this is the fun gate.
 // ============================================================================
 export const M0 = {

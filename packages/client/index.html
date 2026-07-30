@@ -23,6 +23,36 @@
 
       #hud { position: fixed; inset: 0; pointer-events: none; }
 
+      #glitch {
+        position: fixed; inset: 0; pointer-events: none; opacity: 0;
+        z-index: 5; mix-blend-mode: screen;
+      }
+      #glitch.on { opacity: 1; }
+      #glitch.on #glitchScan {
+        position: absolute; inset: 0;
+        background: repeating-linear-gradient(
+          0deg, rgba(255,46,136,.20) 0 2px, transparent 2px 4px);
+        animation: gslide .18s steps(3) infinite;
+      }
+      #glitch.on #glitchBars {
+        position: absolute; inset: 0;
+        background:
+          linear-gradient(90deg, rgba(0,229,255,.30), transparent 12%),
+          linear-gradient(-90deg, rgba(255,46,136,.30), transparent 12%);
+        animation: gjump .09s steps(2) infinite;
+      }
+      #glitch.reduced #glitchScan, #glitch.reduced #glitchBars { display: none; }
+      #glitch.reduced { box-shadow: inset 0 0 0 5px var(--danger); opacity: .85; }
+      @keyframes gslide { to { transform: translateY(4px); } }
+      @keyframes gjump  { 50% { transform: translateX(5px) skewX(-1.2deg); } }
+
+      #qcd {
+        position: absolute; right: 22px; bottom: 118px; text-align: right;
+        color: #8b98a5;
+      }
+      #qcd b { color: var(--danger); font-size: 15px; }
+      #qcd.ready b { color: var(--soul); }
+
       /* Crosshair — dynamic, reads the actual sim spread cone. */
       #cross { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
       #cross div {
@@ -103,6 +133,11 @@
     </style>
   </head>
   <body>
+    <!-- GLITCH BOMB overlay. The victim's screen should be the best-looking
+         thing in the game for two seconds. `#glitch.reduced` keeps the
+         mechanical penalty and drops the distortion. -->
+    <div id="glitch"><div id="glitchScan"></div><div id="glitchBars"></div></div>
+
     <div id="hud">
       <div id="cross">
         <div class="h" id="cl"></div><div class="h" id="cr"></div>
@@ -121,13 +156,15 @@
         <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp; <kbd>Space</kbd> jump / mantle<br />
         <kbd>Shift</kbd> dash &nbsp; <kbd>C</kbd> slide &nbsp; <kbd>F</kbd> zipline<br />
         <kbd>V</kbd> camera &nbsp; <kbd>RMB</kbd> hold to ADS &nbsp; <kbd>R</kbd> reload<br />
-        <kbd>MMB</kbd> melee &nbsp; <kbd>M</kbd> mute &nbsp; <kbd>Esc</kbd> release cursor
+        <kbd>Q</kbd> glitch bomb &nbsp; <kbd>MMB</kbd> melee<br />
+        <kbd>M</kbd> mute &nbsp; <kbd>G</kbd> reduced effects &nbsp; <kbd>Esc</kbd> cursor
       </div>
       <div class="panel" id="ammo">
         <div class="n" id="ammoN">32</div>
         <div class="sub" id="ammoSub">SMG · 720 RPM</div>
       </div>
       <div id="dashes"></div>
+      <div id="qcd"><b>Q</b> <span id="qcdVal">GLITCH</span></div>
       <div id="mode">CAMERA <b id="modeName">TPS</b></div>
     </div>
 

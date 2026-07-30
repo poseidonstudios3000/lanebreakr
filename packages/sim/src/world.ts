@@ -12,7 +12,7 @@ import { SPINE, ENTITY, MOVEMENT, ECONOMY, WORLD, COMBAT, M0, respawnTicks, sudd
 import {
   type WorldState, type HeroState, type TargetState, type PlayerInput,
   type TrooperState, type StructureState, type TeamState,
-  MoveState, CameraMode, Team, MatchPhase, StructureKind, SoulSource,
+  MoveState, CameraMode, Team, MatchPhase, StructureKind, SoulSource, Btn,
 } from './types.js';
 import { buildGreybox } from './map/greybox.js';
 import { buildStrip, type GameMap } from './map/strip.js';
@@ -22,6 +22,7 @@ import { stepTroopers, markRetaliation } from './systems/troopers.js';
 import { stepEconomy, spawnOrb, grantSouls } from './systems/economy.js';
 import { stepStructures, structureMaxHp, onStructureDestroyed, markStructureAggro } from './systems/structures.js';
 import { updateVisibility, newVisibilityMemory, canSee, type VisibilityMemory } from './systems/visibility.js';
+import { stepGlitch, castGlitch, scrambleInput } from './systems/glitch.js';
 import { botInput, makeBot, BOT_TIERS, type BotState, type BotTier } from './systems/bots.js';
 
 const MM = 1000;
@@ -61,6 +62,7 @@ export function createHero(id: number, team: Team, x: number, y: number, z: numb
     spreadMilliDeg: 0, spreadDecayDelay: 0,
     recoilVertMilliDeg: 0, recoilHorizMilliDeg: 0, recoilRecoveryDelay: 0,
     shotsFired: 0, hitsLanded: 0, headshots: 0, damageDealt: 0,
+    glitchTicksLeft: 0, glitchSeed: 0, abilityQCooldown: 0,
     prevButtons: 0, lastDamagedTick: -99999, lastMoveX: 0, lastMoveZ: 0, noInputTicks: 0,
   };
 }
@@ -122,7 +124,7 @@ export function createWorld(matchSeed: number, mode: WorldMode = 'greybox'): Wor
       tick: 0, matchSeed,
       phase: mode === 'strip' ? MatchPhase.Live : MatchPhase.Warmup,
       winner: -1,
-      heroes, troopers: [], orbs: [], structures,
+      heroes, troopers: [], orbs: [], structures, glitches: [],
       teams: [emptyTeam(), emptyTeam()],
       nextWaveTick: WORLD.TROOPERS.FIRST_WAVE_TICK,
       waveIndex: 0,
@@ -308,6 +310,16 @@ export function tick(world: World, inputs: readonly PlayerInput[]): void {
       h.hp = Math.min(h.maxHp, h.hp + Math.round((h.maxHp * COMBAT.REGEN_FRAC_PER_S) / SPINE.SIM_HZ));
     }
 
+    const prevInput = h.prevButtons;
+    // GLITCH BOMB. Cast reads the RAW input (you can always try to throw one),
+    // but movement and aim consume the SCRAMBLED input — the sim owns the
+    // scramble because a client-side one is a client-side one, and because a
+    // replay has to reproduce the exact flailing.
+    if ((input.buttons & Btn.AbilityQ) !== 0 && (prevInput & Btn.AbilityQ) === 0) {
+      castGlitch(s, h, world.map.boxes);
+    }
+    input = scrambleInput(s, h, input);
+
     const prev = h.prevButtons;
     stepMovement(h, input, prev, s.tick, world.map.boxes, world.map.ziplines);
     stepCombat(h, input, prev, s.tick, s.matchSeed, s, world.map.boxes, applyDamage);
@@ -321,6 +333,7 @@ export function tick(world: World, inputs: readonly PlayerInput[]): void {
   }
 
   if (world.mode === 'strip') {
+    stepGlitch(s, applyDamage);
     stepTroopers(s, world.map.trooperSpawn, applyDamage);
     stepStructures(s, applyDamage);
     stepEconomy(s);
@@ -391,6 +404,7 @@ export function hashState(s: WorldState): number {
     push(h.ammo); push(h.reloadTicksLeft); push(h.fireCooldownTicks);
     push(h.spreadMilliDeg); push(h.recoilVertMilliDeg); push(h.recoilHorizMilliDeg);
     push(h.shotsFired); push(h.hitsLanded); push(h.headshots); push(h.damageDealt);
+    push(h.glitchTicksLeft); push(h.glitchSeed); push(h.abilityQCooldown);
     push(h.prevButtons);
   }
   for (const t of s.troopers) {
