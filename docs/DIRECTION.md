@@ -7,6 +7,85 @@ rather than assumed, and those are noted here so they are not discovered later.
 
 ---
 
+## 0. TONE — the most load-bearing note here
+
+> "I do not want fantasy — that is what Dota and LoL are doing. I also do not
+> want super real combat like CoD. Something cool and fun, fresh, unexpected, in
+> the middle. I imagine a watergun might be fun, and a glitch bomb where the
+> enemies that are hit cannot use their controls for a few seconds and freak
+> out."
+
+**This is the decision PRD §11 was missing.** §11 specified a *rendering system*
+(flat-shaded, desaturated, emissive accents) but never said what the world
+*is* — and "not slop" is unachievable without that, because slop is what you get
+when a style has a technique but no point of view.
+
+Two rejected poles, and what they rule out:
+
+| Rejected | What it takes off the table |
+|---|---|
+| **Fantasy (Dota / LoL)** | Swords, magic, robes, runes, ancient-evil framing. Also the *naming* register: no "Arcane", no "Soulrender". |
+| **Military realism (CoD)** | Ballistics fetish, brown-grey palette, tactical gear, gun-porn reload animations, war as subject matter. |
+
+The two examples given are not random — they point at the same place from
+different sides:
+
+- **A watergun** is a *toy*. It implies play rather than combat, saturated
+  colour, summer-backyard energy, and weapons that read as fun to be hit by.
+- **A glitch bomb** is *digital*. It implies the world is synthetic and knows
+  it, that the rules can be tampered with, and that the comedy comes from
+  systems misbehaving.
+
+**Toys inside a simulation that can be tampered with.** Playground objects with
+real physical weight, in a world whose seams are visible on purpose. That
+reading is worth committing to because it makes concrete decisions downstream:
+saturation is allowed and even wanted (which is a genuine revision of §11's
+"desaturated everything except teams/souls"), damage should read as *soaking,
+tagging, splattering* rather than wounding, and the failure states are comic
+rather than grim.
+
+It also resolves the naming register. OVRRUN and LANEBREAKR both read slightly
+military; a toys-and-glitches world wants something with more play in it. Worth
+revisiting alongside the repo rename.
+
+### The GLITCH BOMB, specifically
+
+This is a strong idea and the strongest clip generator proposed so far — losing
+control is funny to watch, funny to land, and *legible with no context*, which
+is Pillar P4 exactly. One design bar it has to clear:
+
+**It must be funny to be hit by, not only funny to land.** Removing a player's
+control is among the most hated mechanics in games when it is long, unclear, or
+lethal — and among the most beloved when it is short, telegraphed, and
+survivable. Concretely, that means:
+
+- **Short.** 1.5–2s, not 4. Long enough to lose a duel, not long enough to
+  resent.
+- **Telegraphed.** A visible arm and a visible radius, so being hit is a read
+  you lost rather than a thing that happened to you.
+- **Non-lethal by itself.** It should not deal meaningful damage. It creates the
+  opening; someone still has to take it.
+- **Spectacular on the receiving end.** Chromatic aberration, input lag,
+  scrambled HUD, the character visibly stuttering. The *victim's* screen should
+  be the best-looking thing in the game for two seconds.
+- **Never a total lockout.** Scramble or invert, do not freeze. A player who can
+  still flail can still get lucky, and that near-miss is the clip.
+
+**Accessibility note:** input inversion and heavy screen distortion cause real
+problems for some players (motion sensitivity, motor impairments). A reduced
+-effects option that keeps the *mechanical* penalty while dropping the visual
+distortion is table stakes, not polish.
+
+### What this changes in the existing build
+
+- §11's "desaturated everything" is revised: the environment can carry colour,
+  as long as teams/souls/objectives still win the contrast fight.
+- Weapon feel work should aim at *satisfying and toy-like*, not *authentic*.
+  The current SMG synthesis is a realistic gunshot and is now off-brief.
+- The four MVP heroes (VOLT/BULWARK/HALO/RIFT) are named and framed neutrally
+  enough to survive, but their kits should be re-read against this: a launcher
+  that fires paint or foam is the same code and a different game.
+
 ## 1. The goal, restated
 
 > "A mix of fun with friends."

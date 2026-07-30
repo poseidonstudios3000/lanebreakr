@@ -60,6 +60,26 @@ Ordered by when they can be built, not by how much they matter.
   and it is the highest-leverage retention item on the list because it turns
   players into content supply. Scope separately.
 
+**Tone — decided 2026-07-31, see `docs/DIRECTION.md` §0:**
+- **D0. Toys inside a simulation that can be tampered with.** Not fantasy
+  (Dota/LoL), not military realism (CoD). Playground objects with real weight,
+  in a world whose seams show on purpose. This resolves what D8 was missing:
+  "not slop" is unachievable without a point of view, and now there is one.
+- **D0a. GLITCH BOMB.** Enemies hit lose control of their inputs briefly. The
+  strongest clip generator proposed so far — legible with zero context, which is
+  P4 exactly. Bar it must clear: funny to be hit by, not only to land. 1.5-2s,
+  telegraphed, non-lethal alone, spectacular on the *victim's* screen, scramble
+  rather than freeze. Needs a reduced-effects accessibility option that keeps
+  the mechanical penalty and drops the visual distortion.
+- **D0b. Watergun-class weapons.** Damage reads as soaking/tagging/splattering
+  rather than wounding. The current SMG audio synthesis is a realistic gunshot
+  and is now off-brief.
+- **D0c. Revise §11's palette rule.** "Desaturated everything except teams and
+  souls" was written for a grim world. The environment can carry colour so long
+  as teams/souls/objectives still win the contrast fight.
+- **D0d. Naming.** OVRRUN and LANEBREAKR both read slightly military against a
+  toys-and-glitches world. Revisit with the repo rename.
+
 **Cross-cutting:**
 - **D8. Art direction pass.** The bar is "good, and not low-effort AI slop."
   §11 specifies the right *system* (flat-shaded, desaturated, emissive accents)
