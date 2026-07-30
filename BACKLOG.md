@@ -28,6 +28,57 @@ Seeded from PRD §16 so a second competing list never gets created.
     5% of the plays, against a milestone that already hard-blocks on ~80
     unsourced audio clips*
 
+## Direction items (2026-07-31) — see `docs/DIRECTION.md` for rationale
+
+Owner intent captured beyond PRD v1.1. Several deliberately reverse §1.4.
+Ordered by when they can be built, not by how much they matter.
+
+**Pull forward — build with pings, not after:**
+- **D1. Emote + comms wheel.** Teammate comms always; enemy-facing opt-in and
+  per-player mutable, default off. §1.4 already makes pings the fog-of-war
+  replacement so a wheel must exist anyway; emotes ride the same input bits,
+  the same wire budget and the same UI. Highest clip-per-byte feature available.
+
+**Blocked on a server (M4+):**
+- **D2. Accounts, guest-first.** Play instantly as a guest; progression accrues
+  to a local identity that can be *claimed* later. Account-first would put a
+  signup between a shared clip and a match, which is the exact friction the
+  browser-first thesis exists to remove.
+- **D3. Meta-currency, separate from souls.** Souls are a per-match resource
+  tuned to a 12-minute arc; if they carry value out of the match, every number
+  in `balance.ts` becomes a real-money number and stops being tunable.
+- **D4. Marketplace** — buy/sell items between players.
+- **D5. Cash-out.** *Legal scoping before architecture.* Engages money
+  transmission / e-money rules and, if any item is chance-acquired and then
+  sellable, gambling law in several jurisdictions. Also collides head-on with
+  D-RISK-1 below.
+- **D6. Skill rating, levels, leaderboards.** Reverses §1.4's ranked/MMR cut.
+  Note M8 already found per-hero win rate near-unmeasurable at a 4-hero roster;
+  a player-facing rating has the same shape of problem at low population.
+- **D7. UGC — "players create their own experiences in our world."** Custom
+  rooms, rule modifiers, possibly map variants. This is a platform, not a mode,
+  and it is the highest-leverage retention item on the list because it turns
+  players into content supply. Scope separately.
+
+**Cross-cutting:**
+- **D8. Art direction pass.** The bar is "good, and not low-effort AI slop."
+  §11 specifies the right *system* (flat-shaded, desaturated, emissive accents)
+  but not what separates deliberate stylisation from default materials:
+  silhouette language, authored lighting, cheap non-uniform surface detail. Needs
+  references, not constants.
+
+**Open risks created by the above:**
+- **D-RISK-1. Real value + invisible bot backfill is a farming exploit by
+  construction.** §10.5/§14 make bot backfill the answer to empty lobbies. If
+  anything earned in a match converts to money, a bot match is a money printer,
+  and the feature keeping the game alive at low population is the one draining
+  it. Must be resolved before D5, not during.
+- **D-RISK-2. Enemy-facing comms is a harassment surface.** "Optional" has to
+  mean default-off and per-player mutable, not a settings toggle nobody finds.
+
+**Naming:** the GitHub repo is `lanebreakr` — one of §0's alt names. The code
+still says OVRRUN throughout. Rename is a mechanical pass; awaiting the call.
+
 ## Deferred implementation, already specified
 
 Not features — specified work whose milestone has not arrived.
