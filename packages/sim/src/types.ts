@@ -156,6 +156,113 @@ export interface HeroState {
   /** Last tick's button mask. Part of state, not a side table — edge detection
    *  must survive rewind-and-replay or every press replays as a fresh press. */
   prevButtons: number;
+  /** Last movement axes, and how long we have gone without a fresh input.
+   *  PRD §10.4: a missing input repeats the last one for <=3 ticks, then zeroes
+   *  the movement axes while holding view angles. It NEVER freezes the entity. */
+  lastMoveX: number;
+  lastMoveZ: number;
+  noInputTicks: number;
+}
+
+export const enum TrooperKind {
+  Line = 0,
+  Lancer = 1,
+  Sieger = 2,
+}
+
+export const enum StructureKind {
+  TowerT1 = 0,
+  TowerT2 = 1,
+  Core = 2,
+}
+
+export interface TrooperState {
+  id: EntityId;
+  team: Team;
+  kind: TrooperKind;
+  alive: boolean;
+  px: number;
+  py: number;
+  pz: number;
+  hp: number;
+  maxHp: number;
+  waveIndex: number;
+  targetId: EntityId;
+  targetDwell: number;
+  attackCooldown: number;
+  retargetIn: number;
+  /** tick at which an enemy HERO last damaged an allied hero near this trooper */
+  retaliateUntil: number;
+  retaliateTarget: EntityId;
+}
+
+/**
+ * A soul orb. PRD §7 calls this the most important system in the game; it is
+ * also the one the document specified least.
+ *
+ * Ownership was never stated, so "deny" had no referent. An orb belongs to the
+ * team OPPOSITE the trooper that dropped it — deterministic, symmetric (4 orbs
+ * per team per wave), and it renders in the owner's colour so the read is one
+ * glance.
+ *
+ * Claim resolves against an HP pool with two independent progress counters.
+ * Owner damage fills `claimProgress`, enemy damage fills `denyProgress`; never
+ * the same pool, or chipping an enemy's orb would help them claim it.
+ */
+export interface OrbState {
+  id: EntityId;
+  ownerTeam: Team;
+  px: number;
+  py: number;
+  pz: number;
+  hoverTicksLeft: number;
+  armTicksLeft: number;
+  claimProgress: number;
+  denyProgress: number;
+  /** last hero of each side to damage it — credited on completion */
+  lastClaimer: EntityId;
+  lastDenier: EntityId;
+  alive: boolean;
+}
+
+export interface StructureState {
+  id: EntityId;
+  team: Team;
+  kind: StructureKind;
+  alive: boolean;
+  px: number;
+  py: number;
+  pz: number;
+  hp: number;
+  maxHp: number;
+  attackCooldown: number;
+  acquireDelay: number;
+  targetId: EntityId;
+  targetDwell: number;
+  /** damage ramp, per tower, never reset by a target switch */
+  rampStacks: number;
+  rampDecayIn: number;
+  /** ticks since last damaged — gates both regen paths */
+  outOfCombat: number;
+  aggroHeroUntil: number;
+  aggroHeroId: EntityId;
+}
+
+export const enum MatchPhase {
+  Warmup = 0,
+  Live = 1,
+  SuddenDeath = 2,
+  Over = 3,
+}
+
+export interface TeamState {
+  souls: number[];
+  /** lifetime contestable earnings — SURGE's gap metric excludes passive */
+  contestableEarned: number;
+  surging: boolean;
+  surgeTicksLeft: number;
+  marchTicksLeft: number;
+  towersLost: number;
 }
 
 export interface TargetState {
@@ -191,11 +298,44 @@ export interface HitEvent {
   geometry: boolean;
 }
 
+export const enum SoulSource {
+  Passive = 0,
+  OrbClaim = 1,
+  OrbDeny = 2,
+  Takedown = 3,
+  Assist = 4,
+  Tower = 5,
+  PitBoss = 6,
+}
+
+export interface SoulEvent {
+  tick: number;
+  heroId: EntityId;
+  team: Team;
+  source: SoulSource;
+  amount: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface WorldState {
   tick: number;
   matchSeed: number;
+  phase: MatchPhase;
+  winner: Team | -1;
   heroes: HeroState[];
+  troopers: TrooperState[];
+  orbs: OrbState[];
+  structures: StructureState[];
+  /** indexed by Team.A / Team.B; Team.Neutral never has one */
+  teams: TeamState[];
+  nextWaveTick: number;
+  waveIndex: number;
+  nextEntityId: number;
+  /** greybox only */
   targets: TargetState[];
-  /** cleared at the top of every tick — consumers read it after tick() returns */
+  /** cleared at the top of every tick — consumers read them after tick() returns */
   events: HitEvent[];
+  soulEvents: SoulEvent[];
 }

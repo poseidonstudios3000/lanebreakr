@@ -8,22 +8,36 @@
  * catch-up, and that is how determinism dies quietly six weeks into netcode.
  */
 
-import { SPINE, ENTITY, MOVEMENT, M0 } from './balance.js';
-import { type WorldState, type HeroState, type TargetState, type PlayerInput, MoveState, CameraMode, Team } from './types.js';
-import { buildGreybox, type GreyboxMap } from './map/greybox.js';
+import { SPINE, ENTITY, MOVEMENT, ECONOMY, WORLD, M0, respawnTicks, suddenDeathDecayPerTick } from './balance.js';
+import {
+  type WorldState, type HeroState, type TargetState, type PlayerInput,
+  type TrooperState, type StructureState, type TeamState,
+  MoveState, CameraMode, Team, MatchPhase, StructureKind, SoulSource,
+} from './types.js';
+import { buildGreybox } from './map/greybox.js';
+import { buildStrip, type GameMap } from './map/strip.js';
 import { stepMovement } from './systems/movement.js';
 import { stepCombat } from './systems/combat.js';
+import { stepTroopers, markRetaliation } from './systems/troopers.js';
+import { stepEconomy, spawnOrb, grantSouls } from './systems/economy.js';
+import { stepStructures, structureMaxHp, onStructureDestroyed, markStructureAggro } from './systems/structures.js';
 
 const MM = 1000;
 
+export type WorldMode = 'greybox' | 'strip';
+
 export interface World {
   state: WorldState;
-  map: GreyboxMap;
+  map: GameMap;
+  mode: WorldMode;
+  /** respawn countdowns, indexed by hero id */
+  respawn: number[];
+  deathsInSuddenDeath: number[];
 }
 
-export function createHero(id: number, x: number, y: number, z: number, yaw: number): HeroState {
+export function createHero(id: number, team: Team, x: number, y: number, z: number, yaw: number): HeroState {
   return {
-    id, team: Team.A, alive: true,
+    id, team, alive: true,
     px: Math.round(x * MM), py: Math.round(y * MM), pz: Math.round(z * MM),
     vx: 0, vy: 0, vz: 0,
     yaw, pitch: 0,
@@ -41,7 +55,7 @@ export function createHero(id: number, x: number, y: number, z: number, yaw: num
     spreadMilliDeg: 0, spreadDecayDelay: 0,
     recoilVertMilliDeg: 0, recoilHorizMilliDeg: 0, recoilRecoveryDelay: 0,
     shotsFired: 0, hitsLanded: 0, headshots: 0, damageDealt: 0,
-    prevButtons: 0,
+    prevButtons: 0, lastMoveX: 0, lastMoveZ: 0, noInputTicks: 0,
   };
 }
 
@@ -49,72 +63,256 @@ function createTarget(id: number, x: number, y: number, z: number, minX: number,
   return {
     id,
     px: Math.round(x * MM), py: Math.round(y * MM), pz: Math.round(z * MM),
-    hp: M0.TARGET_HP * SPINE.DAMAGE_SCALE,
-    maxHp: M0.TARGET_HP * SPINE.DAMAGE_SCALE,
+    hp: M0.TARGET_HP * SPINE.DAMAGE_SCALE, maxHp: M0.TARGET_HP * SPINE.DAMAGE_SCALE,
     alive: true, respawnTicksLeft: 0,
     vx: Math.round(speed * MM),
     minX: Math.round(minX * MM), maxX: Math.round(maxX * MM),
   };
 }
 
-export function createWorld(matchSeed: number): World {
-  const map = buildGreybox();
-  const heroes = [createHero(0, map.spawn.x, map.spawn.y, map.spawn.z, map.spawn.yaw)];
-  const targets = map.targets.map((t, i) => createTarget(i + 100, t.x, t.y, t.z, t.minX, t.maxX, t.speed));
-  return { state: { tick: 0, matchSeed, heroes, targets, events: [] }, map };
+function emptyTeam(): TeamState {
+  return { souls: [], contestableEarned: 0, surging: false, surgeTicksLeft: 0, marchTicksLeft: 0, towersLost: 0 };
+}
+
+export function createWorld(matchSeed: number, mode: WorldMode = 'greybox'): World {
+  const map = mode === 'strip' ? buildStrip() : (buildGreybox() as unknown as GameMap);
+
+  const heroes: HeroState[] = [];
+  const structures: StructureState[] = [];
+  let nextId = 0;
+
+  if (mode === 'strip') {
+    // 3v3. Ids 0–2 are team A, 3–5 team B, always — a fixed id layout is what
+    // lets the wire protocol and the bots index without a lookup.
+    for (const team of [Team.A, Team.B]) {
+      const sp = map.heroSpawn[team]!;
+      for (let i = 0; i < 3; i++) {
+        heroes.push(createHero(nextId++, team, sp.x, sp.y, sp.z + (i - 1) * 2.5, sp.yaw));
+      }
+    }
+    for (const site of map.structures) {
+      const hp = structureMaxHp(site.kind);
+      structures.push({
+        id: nextId++, team: site.team, kind: site.kind, alive: true,
+        px: Math.round(site.x * MM), py: 0, pz: Math.round(site.z * MM),
+        hp, maxHp: hp,
+        attackCooldown: 0, acquireDelay: 0, targetId: -1, targetDwell: 0,
+        rampStacks: 0, rampDecayIn: 0, outOfCombat: 9999,
+        aggroHeroUntil: -1, aggroHeroId: -1,
+      });
+    }
+  } else {
+    heroes.push(createHero(nextId++, Team.A, map.spawn.x, map.spawn.y, map.spawn.z, map.spawn.yaw));
+  }
+
+  const targets = mode === 'greybox'
+    ? map.targets.map((t, i) => createTarget(1000 + i, t.x, t.y, t.z, t.minX, t.maxX, t.speed))
+    : [];
+
+  return {
+    state: {
+      tick: 0, matchSeed,
+      phase: mode === 'strip' ? MatchPhase.Live : MatchPhase.Warmup,
+      winner: -1,
+      heroes, troopers: [], orbs: [], structures,
+      teams: [emptyTeam(), emptyTeam()],
+      nextWaveTick: WORLD.TROOPERS.FIRST_WAVE_TICK,
+      waveIndex: 0,
+      nextEntityId: nextId,
+      targets, events: [], soulEvents: [],
+    },
+    map,
+    mode,
+    respawn: [],
+    deathsInSuddenDeath: [],
+  };
 }
 
 /**
- * One 60Hz step. Pure with respect to (state, inputs): same state + same
- * inputs produce the same next state on any engine, which is what §10.3
- * stakes the architecture on and what tools/replay-diff verifies.
+ * The single damage router. Every source — bullets, troopers, towers, the boss
+ * — resolves through here, so there is exactly one place where "what happens
+ * when a thing loses HP" is decided.
  */
+export function makeApplyDamage(w: World) {
+  const s = w.state;
+  return function applyDamage(targetId: number, milliDamage: number, sourceTeam: Team, attackerId = -1): void {
+    for (const h of s.heroes) {
+      if (h.id !== targetId || !h.alive) continue;
+      if (h.iframeTicksLeft > 0) return; // dash i-frames, evaluated at the rewound tick
+      h.hp -= milliDamage;
+      if (attackerId >= 0) {
+        markRetaliation(s, h, attackerId);
+        markStructureAggro(s, h.team, h.px, h.pz, attackerId);
+      }
+      if (h.hp <= 0) killHero(w, h, attackerId);
+      return;
+    }
+    for (const t of s.troopers) {
+      if (t.id !== targetId || !t.alive) continue;
+      t.hp -= milliDamage;
+      if (t.hp <= 0) { t.alive = false; spawnOrb(s, t); }
+      return;
+    }
+    for (const st of s.structures) {
+      if (st.id !== targetId || !st.alive) continue;
+      st.hp -= milliDamage;
+      st.outOfCombat = 0;
+      if (st.hp <= 0) {
+        st.hp = 0;
+        const over = onStructureDestroyed(s, st);
+        if (!over) {
+          const payout = st.kind === StructureKind.TowerT2
+            ? ECONOMY.TOWER_T2_SOULS_PER_PLAYER : ECONOMY.TOWER_T1_SOULS_PER_PLAYER;
+          const winners = st.team === Team.A ? Team.B : Team.A;
+          for (const h of s.heroes) {
+            if (h.team === winners) grantSouls(s, h, payout, SoulSource.Tower, true);
+          }
+        }
+      }
+      return;
+    }
+    for (const t of s.targets) {
+      if (t.id !== targetId || !t.alive) continue;
+      t.hp -= milliDamage;
+      if (t.hp <= 0) { t.hp = 0; t.alive = false; t.respawnTicksLeft = M0.TARGET_RESPAWN_TICKS; }
+      return;
+    }
+  };
+}
+
+function killHero(w: World, h: HeroState, killerId: number): void {
+  const s = w.state;
+  h.hp = 0;
+  h.alive = false;
+  h.vx = 0; h.vy = 0; h.vz = 0;
+
+  const sd = s.phase === MatchPhase.SuddenDeath;
+  if (sd) w.deathsInSuddenDeath[h.id] = (w.deathsInSuddenDeath[h.id] ?? 0) + 1;
+  w.respawn[h.id] = respawnTicks(s.tick, s.teams[h.team]!.surging, sd, w.deathsInSuddenDeath[h.id] ?? 0);
+
+  const killer = s.heroes.find((x) => x.id === killerId);
+  if (killer !== undefined && killer.team !== h.team) {
+    grantSouls(s, killer, ECONOMY.TAKEDOWN_SOULS, SoulSource.Takedown, true);
+  }
+}
+
+/** One 60Hz step. Pure with respect to (state, inputs). */
 export function tick(world: World, inputs: readonly PlayerInput[]): void {
   const s = world.state;
   s.events.length = 0;
+  s.soulEvents.length = 0;
+
+  const applyDamage = makeApplyDamage(world);
+
+  if (s.phase !== MatchPhase.Over && world.mode === 'strip' && s.tick >= SPINE.SUDDEN_DEATH_TICK) {
+    s.phase = MatchPhase.SuddenDeath;
+  }
 
   // Fixed iteration order over heroes, ascending id. Never Map/Set iteration
   // order, and never "whichever input arrived first".
   for (let i = 0; i < s.heroes.length; i++) {
     const h = s.heroes[i]!;
-    if (!h.alive) continue;
+
+    if (!h.alive) {
+      const left = (world.respawn[h.id] ?? 0) - 1;
+      world.respawn[h.id] = left;
+      if (left <= 0) {
+        const sp = world.mode === 'strip' ? world.map.heroSpawn[h.team]! : world.map.spawn;
+        h.alive = true;
+        h.hp = h.maxHp;
+        h.px = Math.round(sp.x * MM); h.py = Math.round(sp.y * MM); h.pz = Math.round(sp.z * MM);
+        h.vx = 0; h.vy = 0; h.vz = 0;
+        h.ammo = 32; h.reloadTicksLeft = 0;
+      }
+      continue;
+    }
 
     let input: PlayerInput | undefined;
     for (let j = 0; j < inputs.length; j++) {
       if (inputs[j]!.entityId === h.id) { input = inputs[j]; break; }
     }
-    if (input === undefined) continue;
+
+    /**
+     * §10.4: a missing input repeats the last one for up to 3 ticks, then
+     * zeroes the movement axes while holding view angles — it never freezes
+     * the entity. Skipping the whole step instead means gravity, cooldowns and
+     * reloads all stop, so a player whose packet was dropped hangs in mid-air
+     * with a frozen gun. That is a netcode bug you would otherwise not meet
+     * until M4, in a build where it looks like lag.
+     */
+    if (input === undefined) {
+      h.noInputTicks++;
+      const stale = h.noInputTicks > 3;
+      input = {
+        seq: -1, entityId: h.id,
+        moveX: stale ? 0 : h.lastMoveX,
+        moveZ: stale ? 0 : h.lastMoveZ,
+        yaw: h.yaw, pitch: h.pitch,
+        buttons: stale ? 0 : h.prevButtons,
+        fireSubTick: 0,
+      };
+    } else {
+      h.noInputTicks = 0;
+      h.lastMoveX = input.moveX;
+      h.lastMoveZ = input.moveZ;
+    }
 
     const prev = h.prevButtons;
     stepMovement(h, input, prev, s.tick, world.map.boxes, world.map.ziplines);
-    stepCombat(h, input, prev, s.tick, s.matchSeed, s.targets, world.map.boxes, s.events);
+    stepCombat(h, input, prev, s.tick, s.matchSeed, s, world.map.boxes, applyDamage);
     h.prevButtons = input.buttons;
 
-    // Fell out of the world — only reachable in the grey box, but a silent
-    // infinite fall is the worst way to discover a collision bug.
-    if (h.py < -20 * MM) {
-      h.px = Math.round(world.map.spawn.x * MM);
-      h.py = Math.round(world.map.spawn.y * MM);
-      h.pz = Math.round(world.map.spawn.z * MM);
+    if (h.py < -30 * MM) {
+      const sp = world.mode === 'strip' ? world.map.heroSpawn[h.team]! : world.map.spawn;
+      h.px = Math.round(sp.x * MM); h.py = Math.round(sp.y * MM); h.pz = Math.round(sp.z * MM);
       h.vx = 0; h.vy = 0; h.vz = 0;
     }
   }
 
-  for (let i = 0; i < s.targets.length; i++) {
-    const t = s.targets[i]!;
-    if (!t.alive) {
-      t.respawnTicksLeft--;
-      if (t.respawnTicksLeft <= 0) { t.alive = true; t.hp = t.maxHp; }
-      continue;
+  if (world.mode === 'strip') {
+    stepTroopers(s, world.map.trooperSpawn, applyDamage);
+    stepStructures(s, applyDamage);
+    stepEconomy(s);
+
+    if (s.phase === MatchPhase.SuddenDeath) {
+      const fracA = structureFrac(s, Team.A);
+      const fracB = structureFrac(s, Team.B);
+      for (const st of s.structures) {
+        if (!st.alive) continue;
+        const leader = st.team === Team.A ? fracA >= fracB : fracB > fracA;
+        const decay = suddenDeathDecayPerTick(s.tick, leader);
+        st.hp -= Math.round(st.maxHp * decay);
+        if (st.hp <= 0) { st.hp = 0; onStructureDestroyed(s, st); }
+      }
     }
-    if (t.vx !== 0) {
-      t.px += Math.round(t.vx * SPINE.TICK_S);
-      if (t.px >= t.maxX) { t.px = t.maxX; t.vx = -t.vx; }
-      else if (t.px <= t.minX) { t.px = t.minX; t.vx = -t.vx; }
+  } else {
+    for (let i = 0; i < s.targets.length; i++) {
+      const t = s.targets[i]!;
+      if (!t.alive) {
+        t.respawnTicksLeft--;
+        if (t.respawnTicksLeft <= 0) { t.alive = true; t.hp = t.maxHp; }
+        continue;
+      }
+      if (t.vx !== 0) {
+        t.px += Math.round(t.vx * SPINE.TICK_S);
+        if (t.px >= t.maxX) { t.px = t.maxX; t.vx = -t.vx; }
+        else if (t.px <= t.minX) { t.px = t.minX; t.vx = -t.vx; }
+      }
     }
   }
 
   s.tick++;
+}
+
+function structureFrac(s: WorldState, team: Team): number {
+  let hp = 0;
+  let max = 0;
+  for (const st of s.structures) {
+    if (st.team !== team) continue;
+    hp += Math.max(0, st.hp);
+    max += st.maxHp;
+  }
+  return max > 0 ? hp / max : 0;
 }
 
 /**
@@ -132,11 +330,10 @@ export function hashState(s: WorldState): number {
     hash ^= (n >>> 24) & 0xff; hash = Math.imul(hash, 0x01000193);
   };
 
-  push(s.tick);
+  push(s.tick); push(s.phase); push(s.winner); push(s.waveIndex); push(s.nextEntityId);
   for (const h of s.heroes) {
-    push(h.px); push(h.py); push(h.pz);
-    push(h.vx); push(h.vy); push(h.vz);
-    push(h.yaw); push(h.pitch); push(h.hp);
+    push(h.px); push(h.py); push(h.pz); push(h.vx); push(h.vy); push(h.vz);
+    push(h.yaw); push(h.pitch); push(h.hp); push(h.alive ? 1 : 0);
     push(h.moveState); push(h.grounded ? 1 : 0);
     push(h.dashCharges); push(h.dashRechargeTicks); push(h.dashTicksLeft);
     push(h.slideTicksLeft); push(h.mantleTicksLeft); push(h.ziplineId); push(h.ziplineT);
@@ -145,6 +342,22 @@ export function hashState(s: WorldState): number {
     push(h.shotsFired); push(h.hitsLanded); push(h.headshots); push(h.damageDealt);
     push(h.prevButtons);
   }
+  for (const t of s.troopers) {
+    push(t.id); push(t.px); push(t.py); push(t.pz); push(t.hp); push(t.alive ? 1 : 0);
+    push(t.targetId); push(t.attackCooldown); push(t.retargetIn);
+  }
+  for (const o of s.orbs) {
+    push(o.id); push(o.px); push(o.py); push(o.pz); push(o.hoverTicksLeft);
+    push(o.claimProgress); push(o.denyProgress); push(o.alive ? 1 : 0);
+  }
+  for (const st of s.structures) {
+    push(st.id); push(st.hp); push(st.alive ? 1 : 0); push(st.targetId);
+    push(st.attackCooldown); push(st.rampStacks); push(st.outOfCombat);
+  }
+  for (const t of s.teams) {
+    push(t.contestableEarned); push(t.surging ? 1 : 0); push(t.marchTicksLeft);
+    for (const v of t.souls) push(v ?? 0);
+  }
   for (const t of s.targets) {
     push(t.px); push(t.py); push(t.pz); push(t.hp); push(t.alive ? 1 : 0); push(t.vx);
   }
@@ -152,3 +365,4 @@ export function hashState(s: WorldState): number {
 }
 
 export const EYE_HEIGHT_M = ENTITY.EYE_HEIGHT_M;
+export type { TrooperState, StructureState };

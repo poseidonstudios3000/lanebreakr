@@ -10,9 +10,10 @@
 
 import * as THREE from 'three';
 import type { Aabb, World, HitEvent } from '@ovrrun/sim';
-import { ENTITY, M0 } from '@ovrrun/sim';
+import { ENTITY, M0, WORLD, ECONOMY } from '@ovrrun/sim';
 
 const TEAM_A = 0x00e5ff;
+const TEAM_B = 0xff6b1f;
 const DANGER = 0xff2e88;
 const SOUL = 0xffd966;
 
@@ -30,6 +31,7 @@ export class Scene {
 
   private tracers: { mesh: THREE.Line; life: number }[] = [];
   private sparks: { mesh: THREE.Sprite; life: number; vy: number }[] = [];
+  private stripMode = false;
   private tracerPool: THREE.Line[] = [];
   private sparkPool: THREE.Sprite[] = [];
 
@@ -55,6 +57,7 @@ export class Scene {
     this.buildZiplines(world);
     this.buildTargets(world);
     this.buildHero();
+    this.stripMode = world.mode === 'strip';
 
     this.muzzle = new THREE.PointLight(0xffd9a0, 0, 9, 2);
     this.scene.add(this.muzzle);
@@ -191,6 +194,126 @@ export class Scene {
   }
 
   // -------------------------------------------------------------------------
+
+  /**
+   * Troopers, orbs and structures — pooled, because a 12-minute match spawns
+   * ~450 troopers and ~900 orbs and allocating a mesh per entity would sawtooth
+   * the frame time against §10.6's 8ms budget.
+   *
+   * Colour carries meaning and nothing else does (§11): the environment is
+   * desaturated slate, and only teams, souls and objectives are saturated. An
+   * orb renders in its OWNER's colour, which is what makes "that one is mine to
+   * claim / theirs to deny" a one-glance read.
+   */
+  private pool = {
+    troopers: [] as THREE.Mesh[],
+    orbs: [] as THREE.Mesh[],
+    structures: [] as THREE.Group[],
+  };
+
+  private ensureStrip(world: World): void {
+    if (this.pool.structures.length > 0 || world.state.structures.length === 0) return;
+    for (const st of world.state.structures) {
+      const dim = st.kind === 2 ? WORLD.STRUCTURES.CORE_COLLIDER_M : WORLD.STRUCTURES.TOWER_COLLIDER_M;
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(dim[0]!, dim[1]!, dim[2]!),
+        new THREE.MeshLambertMaterial({ color: 0x39434e }),
+      );
+      body.position.y = dim[1]! / 2;
+      // The emissive band is the health bar: it drains downward as the
+      // structure dies, so power state is readable from across the map (P4).
+      const band = new THREE.Mesh(
+        new THREE.BoxGeometry(dim[0]! * 1.04, dim[1]! * 0.9, dim[2]! * 1.04),
+        new THREE.MeshBasicMaterial({
+          color: st.team === 0 ? TEAM_A : TEAM_B, transparent: true, opacity: 0.55,
+        }),
+      );
+      band.position.y = dim[1]! * 0.45;
+      g.add(body, band);
+      g.position.set(st.px / 1000, 0, st.pz / 1000);
+      this.scene.add(g);
+      this.pool.structures.push(g);
+    }
+  }
+
+  private trooperMesh(i: number): THREE.Mesh {
+    let m = this.pool.troopers[i];
+    if (m === undefined) {
+      m = new THREE.Mesh(
+        new THREE.CapsuleGeometry(WORLD.TROOPERS.HITBOX_RADIUS_M, WORLD.TROOPERS.HITBOX_HEIGHT_M - WORLD.TROOPERS.HITBOX_RADIUS_M * 2, 3, 7),
+        new THREE.MeshLambertMaterial({ color: TEAM_A }),
+      );
+      this.scene.add(m);
+      this.pool.troopers[i] = m;
+    }
+    return m;
+  }
+
+  private orbMesh(i: number): THREE.Mesh {
+    let m = this.pool.orbs[i];
+    if (m === undefined) {
+      m = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(ECONOMY.ORB_HITBOX_RADIUS_M, 0),
+        new THREE.MeshBasicMaterial({ color: SOUL, transparent: true, opacity: 0.95 }),
+      );
+      this.scene.add(m);
+      this.pool.orbs[i] = m;
+    }
+    return m;
+  }
+
+  syncStrip(world: World, tick: number): void {
+    this.ensureStrip(world);
+    const s = world.state;
+
+    let n = 0;
+    for (const t of s.troopers) {
+      if (!t.alive) continue;
+      const m = this.trooperMesh(n++);
+      m.visible = true;
+      m.position.set(t.px / 1000, t.py / 1000 + WORLD.TROOPERS.HITBOX_HEIGHT_M / 2, t.pz / 1000);
+      const mat = m.material as THREE.MeshLambertMaterial;
+      mat.color.setHex(t.team === 0 ? TEAM_A : TEAM_B);
+      const frac = t.hp / t.maxHp;
+      mat.color.multiplyScalar(0.45 + frac * 0.55);
+    }
+    for (let i = n; i < this.pool.troopers.length; i++) this.pool.troopers[i]!.visible = false;
+
+    let o = 0;
+    for (const orb of s.orbs) {
+      if (!orb.alive) continue;
+      const m = this.orbMesh(o++);
+      m.visible = true;
+      // Bob and spin: a static orb reads as scenery, and §7.2 needs it to read
+      // as "get this, now".
+      const bob = Math.sin((tick + orb.id * 13) * 0.06) * 0.12;
+      m.position.set(orb.px / 1000, orb.py / 1000 + bob, orb.pz / 1000);
+      m.rotation.y = tick * 0.03 + orb.id;
+      m.rotation.x = tick * 0.02;
+      const armed = orb.armTicksLeft <= 0;
+      const mat = m.material as THREE.MeshBasicMaterial;
+      mat.color.setHex(orb.ownerTeam === 0 ? TEAM_A : TEAM_B);
+      mat.opacity = armed ? 0.95 : 0.35;
+      const urgency = 1 + (1 - orb.hoverTicksLeft / ECONOMY.ORB_HOVER_TICKS) * 0.5;
+      m.scale.setScalar(armed ? urgency : 0.6);
+    }
+    for (let i = o; i < this.pool.orbs.length; i++) this.pool.orbs[i]!.visible = false;
+
+    for (let i = 0; i < s.structures.length; i++) {
+      const st = s.structures[i]!;
+      const g = this.pool.structures[i];
+      if (g === undefined) continue;
+      g.visible = st.alive;
+      if (!st.alive) continue;
+      const dim = st.kind === 2 ? WORLD.STRUCTURES.CORE_COLLIDER_M : WORLD.STRUCTURES.TOWER_COLLIDER_M;
+      const frac = Math.max(0, st.hp / st.maxHp);
+      const band = g.children[1] as THREE.Mesh;
+      band.scale.y = Math.max(0.001, frac);
+      band.position.y = (dim[1]! * 0.9 * frac) / 2;
+      (band.material as THREE.MeshBasicMaterial).opacity = 0.35 + frac * 0.35;
+    }
+  }
 
   syncWorld(world: World, heroX: number, heroY: number, heroZ: number, heroYaw: number, hideHero: boolean): void {
     this.heroMesh.position.set(heroX, heroY, heroZ);

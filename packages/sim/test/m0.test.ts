@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createWorld, tick, createHero, type World } from '../src/world.js';
-import { Btn, MoveState, CameraMode, type PlayerInput } from '../src/types.js';
+import { Btn, MoveState, CameraMode, Team, type PlayerInput } from '../src/types.js';
 import { currentSpreadDeg } from '../src/systems/combat.js';
 import { MOVEMENT, COMBAT, CAMERA, SPINE, M0 } from '../src/balance.js';
 
@@ -401,7 +401,7 @@ describe('M0 — spawn sanity', () => {
   });
 
   it('createHero produces only integer state', () => {
-    const h = createHero(0, 1.234, 5.678, -9.012, 100);
+    const h = createHero(0, Team.A, 1.234, 5.678, -9.012, 100);
     for (const [k, v] of Object.entries(h)) {
       if (typeof v === 'number') expect(Number.isInteger(v), `${k}=${v}`).toBe(true);
     }

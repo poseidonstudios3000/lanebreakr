@@ -20,7 +20,14 @@ import { AudioEngine } from './audio/audio.js';
 const MM = 1000;
 const HERO_ID = 0;
 
-const world = createWorld(0xc0ffee);
+/**
+ * ?map=strip loads THE STRIP (M2), anything else loads the M0 grey box.
+ * Keeping both live matters: the grey box is the range where feel changes get
+ * measured, and M0's gate is the one that decides whether any of this is worth
+ * building.
+ */
+const MODE = new URLSearchParams(location.search).get('map') === 'strip' ? 'strip' : 'greybox';
+const world = createWorld(0xc0ffee, MODE);
 const hero = world.state.heroes[0]!;
 
 const scene = new Scene(document.body, world);
@@ -157,6 +164,7 @@ function frame(now: number): void {
   );
 
   scene.syncWorld(world, ix, iy, iz, input.quantisedYawRad, hideHero);
+  if (MODE === 'strip') scene.syncStrip(world, world.state.tick);
 
   if (pendingEvents.length > 0) {
     const [ax, , az] = aimDir(hero.yaw, hero.pitch);

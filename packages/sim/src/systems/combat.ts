@@ -10,15 +10,16 @@
  * character's perspective, you shoot the wall.
  */
 
-import { COMBAT, ENTITY, CAMERA, SPINE, M0 } from '../balance.js';
+import { COMBAT, ENTITY, CAMERA, SPINE, ECONOMY, WORLD } from '../balance.js';
 import { sin, cos, clamp, PI } from '../mathd.js';
 import { rngFor, RNG_STREAM } from '../rng.js';
 import {
-  type HeroState, type TargetState, type HitEvent, type PlayerInput,
-  MoveState, CameraMode, Btn,
+  type HeroState, type PlayerInput, type WorldState,
+  MoveState, CameraMode, Btn, Team,
 } from '../types.js';
 import { type Aabb, rayVsBoxes, rayVsCapsule, rayVsSphere } from '../collision.js';
 import { aimDir } from './movement.js';
+import { damageOrb } from './economy.js';
 
 const DT = SPINE.TICK_S;
 const MM = 1000;
@@ -91,10 +92,11 @@ export function stepCombat(
   prevButtons: number,
   tick: number,
   matchSeed: number,
-  targets: TargetState[],
+  s: WorldState,
   boxes: readonly Aabb[],
-  events: HitEvent[],
+  applyDamage: (targetId: number, milliDamage: number, sourceTeam: Team, attackerId?: number) => void,
 ): void {
+  const events = s.events;
   // ---- timers ------------------------------------------------------------
   if (h.fireCooldownTicks > 0) h.fireCooldownTicks--;
   if (h.postReloadLockout > 0) h.postReloadLockout--;
@@ -226,38 +228,69 @@ export function stepCombat(
   const mz = h.pz / MM + az * ENTITY.MUZZLE_FORWARD_M;
 
   // ---- trace -------------------------------------------------------------
+  // Geometry first, so it caps the ray. Everything else must beat that t.
   const geo = rayVsBoxes(mx, my, mz, dx, dy, dz, MAX_RANGE_M, boxes);
   let bestT = geo.hit ? geo.t : MAX_RANGE_M;
-  let hitTarget: TargetState | null = null;
+  let hitId = -1;
+  let hitKind: 'hero' | 'trooper' | 'orb' | 'target' | null = null;
   let headshot = false;
   let hx = 0, hy = 0, hz = 0, nx = 0, ny = 0, nz = 0;
 
-  for (let i = 0; i < targets.length; i++) {
-    const t = targets[i]!;
-    if (!t.alive) continue;
-    const tx = t.px / MM, ty = t.py / MM, tz = t.pz / MM;
-
-    const head = rayVsSphere(
-      mx, my, mz, dx, dy, dz, bestT,
-      tx, ty + ENTITY.HEAD_SPHERE_CENTER_M, tz, ENTITY.HEAD_SPHERE_RADIUS_M,
-    );
-    if (head.hit && head.t < bestT) {
-      bestT = head.t; hitTarget = t; headshot = true;
-      hx = head.x; hy = head.y; hz = head.z; nx = head.nx; ny = head.ny; nz = head.nz;
-      continue;
+  const capsuleTest = (
+    id: number, kind: 'hero' | 'trooper' | 'target',
+    px: number, py: number, pz: number,
+    radius: number, height: number, headR: number, headY: number,
+    headsEnabled: boolean,
+  ): void => {
+    const tx = px / MM, ty = py / MM, tz = pz / MM;
+    if (headsEnabled) {
+      const head = rayVsSphere(mx, my, mz, dx, dy, dz, bestT, tx, ty + headY, tz, headR);
+      if (head.hit && head.t < bestT) {
+        bestT = head.t; hitId = id; hitKind = kind; headshot = true;
+        hx = head.x; hy = head.y; hz = head.z; nx = head.nx; ny = head.ny; nz = head.nz;
+        return;
+      }
     }
-
-    const body = rayVsCapsule(
-      mx, my, mz, dx, dy, dz, bestT,
-      tx, ty, tz, ENTITY.CAPSULE_RADIUS_M, ENTITY.CAPSULE_HEIGHT_M,
-    );
+    const body = rayVsCapsule(mx, my, mz, dx, dy, dz, bestT, tx, ty, tz, radius, height);
     if (body.hit && body.t < bestT) {
-      bestT = body.t; hitTarget = t; headshot = false;
+      bestT = body.t; hitId = id; hitKind = kind; headshot = false;
       hx = body.x; hy = body.y; hz = body.z; nx = body.nx; ny = body.ny; nz = body.nz;
     }
+  };
+
+  // Fixed evaluation order: heroes, troopers, orbs, range targets.
+  for (const o of s.heroes) {
+    if (!o.alive || o.id === h.id || o.team === h.team) continue;
+    capsuleTest(o.id, 'hero', o.px, o.py, o.pz,
+      ENTITY.CAPSULE_RADIUS_M, ENTITY.CAPSULE_HEIGHT_M,
+      ENTITY.HEAD_SPHERE_RADIUS_M, ENTITY.HEAD_SPHERE_CENTER_M, true);
+  }
+  // BLOCKS_BULLETS: your own wave is mobile cover, so friendly troopers are
+  // traced too. Shooting through a wave is a real decision, not a free line.
+  const TR = WORLD.TROOPERS;
+  for (const t of s.troopers) {
+    if (!t.alive) continue;
+    capsuleTest(t.id, 'trooper', t.px, t.py, t.pz,
+      TR.HITBOX_RADIUS_M, TR.HITBOX_HEIGHT_M,
+      TR.HEAD_SPHERE_RADIUS_M, TR.HEAD_SPHERE_CENTER_Y_M, TR.HEADSHOTS_ENABLED);
+  }
+  for (const o of s.orbs) {
+    if (!o.alive || o.armTicksLeft > 0) continue;
+    const sp = rayVsSphere(mx, my, mz, dx, dy, dz, bestT,
+      o.px / MM, o.py / MM, o.pz / MM, ECONOMY.ORB_HITBOX_RADIUS_M);
+    if (sp.hit && sp.t < bestT) {
+      bestT = sp.t; hitId = o.id; hitKind = 'orb'; headshot = false;
+      hx = sp.x; hy = sp.y; hz = sp.z; nx = sp.nx; ny = sp.ny; nz = sp.nz;
+    }
+  }
+  for (const t of s.targets) {
+    if (!t.alive) continue;
+    capsuleTest(t.id, 'target', t.px, t.py, t.pz,
+      ENTITY.CAPSULE_RADIUS_M, ENTITY.CAPSULE_HEIGHT_M,
+      ENTITY.HEAD_SPHERE_RADIUS_M, ENTITY.HEAD_SPHERE_CENTER_M, true);
   }
 
-  if (hitTarget === null) {
+  if (hitKind === null) {
     if (geo.hit) {
       events.push({
         tick, shooterId: h.id, targetId: -1,
@@ -268,31 +301,51 @@ export function stepCombat(
     return;
   }
 
+  const falloff = falloffMult(bestT);
+
+  // ---- orbs take a separate, flat damage number --------------------------
+  // Orb damage = BASE × FALLOFF only: no headshot, no item bonuses, no ability
+  // damage. The falloff half is BULWARK's range gate; the no-bonuses half stops
+  // an itemisation→faster-farm spiral. Collapsing them into one flag is what
+  // made two derived domains contradict each other.
+  if (hitKind === 'orb') {
+    const orb = s.orbs.find((o) => o.id === hitId);
+    if (orb !== undefined) {
+      const done = damageOrb(s, orb, h, ECONOMY.ORB_DAMAGE_SMG, ECONOMY.ORB_DAMAGE_APPLIES_FALLOFF ? falloff : 1);
+      events.push({
+        tick, shooterId: h.id, targetId: hitId,
+        x: hx, y: hy, z: hz, nx, ny, nz,
+        damage: 0, headshot: false, killed: done, geometry: false,
+      });
+    }
+    return;
+  }
+
   // ---- damage ------------------------------------------------------------
-  const dist = bestT;
   const base = W.DAMAGE * SPINE.DAMAGE_SCALE;
-  const afterFalloff = Math.trunc(base * falloffMult(dist));
-  const afterHead = headshot
-    ? Math.trunc(afterFalloff * COMBAT.HEADSHOT_MULT_HITSCAN)
-    : afterFalloff;
+  const afterFalloff = Math.trunc(base * falloff);
+  const afterHead = headshot ? Math.trunc(afterFalloff * COMBAT.HEADSHOT_MULT_HITSCAN) : afterFalloff;
   const dmg = Math.max(COMBAT.MIN_DAMAGE_MILLI, afterHead);
 
-  hitTarget.hp -= dmg;
   h.hitsLanded++;
   h.damageDealt += dmg;
   if (headshot) h.headshots++;
 
-  let killed = false;
-  if (hitTarget.hp <= 0) {
-    hitTarget.hp = 0;
-    hitTarget.alive = false;
-    hitTarget.respawnTicksLeft = M0.TARGET_RESPAWN_TICKS;
-    killed = true;
-  }
+  const before = hpOf(s, hitId);
+  applyDamage(hitId, dmg, h.team, h.id);
+  const killed = before > 0 && hpOf(s, hitId) <= 0;
 
   events.push({
-    tick, shooterId: h.id, targetId: hitTarget.id,
+    tick, shooterId: h.id, targetId: hitId,
     x: hx, y: hy, z: hz, nx, ny, nz,
     damage: dmg, headshot, killed, geometry: false,
   });
+}
+
+function hpOf(s: WorldState, id: number): number {
+  for (const h of s.heroes) if (h.id === id) return h.hp;
+  for (const t of s.troopers) if (t.id === id) return t.hp;
+  for (const st of s.structures) if (st.id === id) return st.hp;
+  for (const t of s.targets) if (t.id === id) return t.hp;
+  return 0;
 }
