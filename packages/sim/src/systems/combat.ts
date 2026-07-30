@@ -15,9 +15,9 @@ import { sin, cos, clamp, PI } from '../mathd.js';
 import { rngFor, RNG_STREAM } from '../rng.js';
 import {
   type HeroState, type PlayerInput, type WorldState,
-  MoveState, CameraMode, Btn, Team,
+  MoveState, CameraMode, Btn, Team, StructureKind,
 } from '../types.js';
-import { type Aabb, rayVsBoxes, rayVsCapsule, rayVsSphere } from '../collision.js';
+import { type Aabb, rayVsBox, rayVsBoxes, rayVsCapsule, rayVsSphere } from '../collision.js';
 import { aimDir } from './movement.js';
 import { damageOrb } from './economy.js';
 
@@ -232,7 +232,7 @@ export function stepCombat(
   const geo = rayVsBoxes(mx, my, mz, dx, dy, dz, MAX_RANGE_M, boxes);
   let bestT = geo.hit ? geo.t : MAX_RANGE_M;
   let hitId = -1;
-  let hitKind: 'hero' | 'trooper' | 'orb' | 'target' | null = null;
+  let hitKind: 'hero' | 'trooper' | 'orb' | 'target' | 'structure' | null = null;
   let headshot = false;
   let hx = 0, hy = 0, hz = 0, nx = 0, ny = 0, nz = 0;
 
@@ -289,6 +289,30 @@ export function stepCombat(
       ENTITY.CAPSULE_RADIUS_M, ENTITY.CAPSULE_HEIGHT_M,
       ENTITY.HEAD_SPHERE_RADIUS_M, ENTITY.HEAD_SPHERE_CENTER_M, true);
   }
+  /**
+   * Structures. These are also in `boxes` as world geometry, which is what
+   * makes them block bullets and movement — but that means a shot at a tower
+   * resolved as a WALL HIT and dealt zero damage. A bot reached 2m from a tower
+   * and could not scratch it; twelve minutes of bench read 100% on every
+   * structure and looked like a pathing problem.
+   *
+   * Tested last and on `<= bestT` so it ties with, and beats, the identical
+   * geometry hit at the same surface.
+   */
+  for (const st of s.structures) {
+    if (!st.alive || st.team === h.team) continue;
+    const dim = st.kind === StructureKind.Core
+      ? WORLD.STRUCTURES.CORE_COLLIDER_M : WORLD.STRUCTURES.TOWER_COLLIDER_M;
+    const cx = st.px / MM, cz = st.pz / MM;
+    const hit = rayVsBox(mx, my, mz, dx, dy, dz, bestT, {
+      minX: cx - dim[0]! / 2, minY: 0, minZ: cz - dim[2]! / 2,
+      maxX: cx + dim[0]! / 2, maxY: dim[1]!, maxZ: cz + dim[2]! / 2,
+    });
+    if (hit.hit && hit.t <= bestT) {
+      bestT = hit.t; hitId = st.id; hitKind = 'structure'; headshot = false;
+      hx = hit.x; hy = hit.y; hz = hit.z; nx = hit.nx; ny = hit.ny; nz = hit.nz;
+    }
+  }
 
   if (hitKind === null) {
     if (geo.hit) {
@@ -323,6 +347,27 @@ export function stepCombat(
 
   // ---- damage ------------------------------------------------------------
   const base = W.DAMAGE * SPINE.DAMAGE_SCALE;
+  // §12 M2 settlement: structures take no headshots, and falloff does not
+  // apply to them — the per-weapon STRUCTURE_DAMAGE_MULT already encodes
+  // archetype siege identity, and stacking falloff on top double-punishes the
+  // shotgun and invalidates the single-number siege model.
+  if (hitKind === 'structure') {
+    const dmgS = Math.max(
+      COMBAT.MIN_DAMAGE_MILLI,
+      Math.trunc(base * (COMBAT.FALLOFF_APPLIES_TO_STRUCTURES ? falloff : 1) * W.STRUCTURE_DAMAGE_MULT),
+    );
+    h.hitsLanded++;
+    h.damageDealt += dmgS;
+    const beforeS = hpOf(s, hitId);
+    applyDamage(hitId, dmgS, h.team, h.id);
+    events.push({
+      tick, shooterId: h.id, targetId: hitId,
+      x: hx, y: hy, z: hz, nx, ny, nz,
+      damage: dmgS, headshot: false,
+      killed: beforeS > 0 && hpOf(s, hitId) <= 0, geometry: false,
+    });
+    return;
+  }
   const afterFalloff = Math.trunc(base * falloff);
   const afterHead = headshot ? Math.trunc(afterFalloff * COMBAT.HEADSHOT_MULT_HITSCAN) : afterFalloff;
   const dmg = Math.max(COMBAT.MIN_DAMAGE_MILLI, afterHead);

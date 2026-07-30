@@ -159,6 +159,8 @@ export interface HeroState {
   /** Last movement axes, and how long we have gone without a fresh input.
    *  PRD §10.4: a missing input repeats the last one for <=3 ticks, then zeroes
    *  the movement axes while holding view angles. It NEVER freezes the entity. */
+  /** tick of the last damage taken — gates §6.2's out-of-combat regen */
+  lastDamagedTick: number;
   lastMoveX: number;
   lastMoveZ: number;
   noInputTicks: number;

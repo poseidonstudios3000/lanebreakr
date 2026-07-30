@@ -219,6 +219,12 @@ export const COMBAT = {
   LIMB_MULT: 1.0, // no limb penalty — Pillar P4 legibility
   MIN_DAMAGE_MILLI: 1000,
 
+  /** §6.2. Missing from the first build, and its absence was not subtle: a bot
+   *  that dropped below its retreat threshold never recovered, so it walked
+   *  backwards into its own core and stayed there for the rest of the match. */
+  REGEN_FRAC_PER_S: 0.02,
+  REGEN_OUT_OF_COMBAT_TICKS: 300, // 5.0s
+
   SPREAD_MOVE_SPEED_REF_MPS: 6.0,
   SPREAD_DASH_TAIL_TICKS: 12,
 

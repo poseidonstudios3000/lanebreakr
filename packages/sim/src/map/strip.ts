@@ -193,8 +193,23 @@ export function buildStrip(): GameMap {
     ziplines.push({ id: i, ax: -ZX, ay: M.ZIPLINE_Y_M, az: cz, bx: ZX, by: M.ZIPLINE_Y_M, bz: cz, length: ZX * 2 });
   }
 
-  const spawnA = { x: -M.HERO_SPAWN_X_ABS_M, y: 0.05, z: 0, yaw: 2048 }; // facing +X
-  const spawnB = { x: M.HERO_SPAWN_X_ABS_M, y: 0.05, z: 0, yaw: 6144 }; // facing −X
+  /**
+   * Heroes spawn IN FRONT of their core, not behind it.
+   *
+   * §4.1 puts the spawn room 6m behind the core, which is the right fiction —
+   * but the core is a solid 8m-wide collider sitting on the lane centreline, so
+   * spawning behind it means every hero has to path around their own base to
+   * leave. Bots have no pathfinder (§10.5 specifies a behaviour tree), so they
+   * ground themselves against it: a diagnostic run had team B pinned at the far
+   * wall for six straight minutes and every structure at 100%, which reads as a
+   * balance problem and is actually a geometry one.
+   *
+   * The spawn room itself belongs in the map later, with a mouth that opens
+   * forward. Until then the spawn point sits between the core and T2.
+   */
+  const spawnX = M.CORE_X_ABS_M - 6; // 94: clear of the core, behind T2
+  const spawnA = { x: -spawnX, y: 0.05, z: 0, yaw: 2048 }; // facing +X
+  const spawnB = { x: spawnX, y: 0.05, z: 0, yaw: 6144 }; // facing −X
 
   return {
     boxes,

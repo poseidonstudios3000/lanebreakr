@@ -17,12 +17,12 @@
  * aim-error pair, so difficulty is two numbers rather than three AIs.
  */
 
-import { SPINE, ECONOMY, MOVEMENT, WORLD, COMBAT } from '../balance.js';
-import { atan2, sin, cos, clamp, PI, TAU } from '../mathd.js';
+import { ECONOMY, WORLD, COMBAT } from '../balance.js';
+import { atan2, clamp, PI, TAU } from '../mathd.js';
 import { rngFor, RNG_STREAM } from '../rng.js';
 import {
   type WorldState, type HeroState, type PlayerInput,
-  Btn, Team, MatchPhase, StructureKind, YAW_STEPS, PITCH_LIMIT,
+  Btn, Team, MatchPhase, YAW_STEPS, PITCH_LIMIT,
 } from '../types.js';
 import { type Aabb } from '../collision.js';
 import { canSee, canSeeRaw, type VisibilityMemory } from './visibility.js';
@@ -59,6 +59,11 @@ export interface BotState {
   strafeSign: number;
   strafeTicks: number;
   retreating: boolean;
+  /** stuck detection — the lane has cover, a pit, tunnels and its own base */
+  lastX: number;
+  lastZ: number;
+  stuckCheckIn: number;
+  unstickTicks: number;
 }
 
 export function makeBot(heroId: number, tier: BotTier): BotState {
@@ -70,6 +75,7 @@ export function makeBot(heroId: number, tier: BotTier): BotState {
     aimYaw: 0, aimPitch: 0,
     strafeSign: 1, strafeTicks: 0,
     retreating: false,
+    lastX: 0, lastZ: 0, stuckCheckIn: 30, unstickTicks: 0,
   };
 }
 
@@ -158,6 +164,40 @@ export function botInput(
     orb = { px: o.px / MM, py: o.py / MM, pz: o.pz / MM, id: o.id, mine: o.ownerTeam === h.team };
   }
 
+  /**
+   * Enemy troopers. Bots that never shoot the wave are the reason a bot match
+   * stalls: two symmetric waves annihilate each other at mid in perpetuity, no
+   * side ever gains the trooper advantage that pushes a lane, and every
+   * structure sits at 100% for the whole match.
+   *
+   * Prefer the lowest-HP one in range — that is last-hitting, it is what spawns
+   * the orbs §7 is built around, and it is what a human does.
+   */
+  let creep: { px: number; py: number; pz: number; hp: number } | null = null;
+  let creepDist = 1e9;
+  let creepHp = 1e18;
+  for (const t of s.troopers) {
+    if (!t.alive || t.team === h.team) continue;
+    const d = dist(h, t.px / MM, t.pz / MM);
+    if (d > COMBAT.SMG.FALLOFF_END_M) continue;
+    if (!canSeeRaw(h, t.px / MM, t.py / MM, t.pz / MM, WORLD.TROOPERS.HITBOX_HEIGHT_M, boxes)) continue;
+    if (t.hp < creepHp || (t.hp === creepHp && d < creepDist)) {
+      creepHp = t.hp; creepDist = d;
+      creep = { px: t.px / MM, py: t.py / MM, pz: t.pz / MM, hp: t.hp };
+    }
+  }
+
+  // Nearest live enemy structure, and whether we are close enough to commit.
+  let siegeTarget: { x: number; z: number } | null = null;
+  let siegeDist = 1e9;
+  for (const st of s.structures) {
+    if (!st.alive || st.team === h.team) continue;
+    const d = dist(h, st.px / MM, st.pz / MM);
+    if (d < siegeDist) { siegeDist = d; siegeTarget = { x: st.px / MM, z: st.pz / MM }; }
+  }
+  const SIEGE_COMMIT_M = WORLD.STRUCTURES.TOWER_RANGE_M + 15;
+  if (siegeDist > SIEGE_COMMIT_M) siegeTarget = null;
+
   // ---- reaction ---------------------------------------------------------
   // A newly-acquired target cannot be acted on for `reactionTicks`. This is
   // the whole of "difficulty" alongside aim error.
@@ -185,6 +225,9 @@ export function botInput(
   } else if (orb !== null) {
     wantYaw = yawTo(h, orb.px, orb.pz);
     wantPitch = pitchTo(h, orb.px, orb.py, orb.pz);
+  } else if (creep !== null) {
+    wantYaw = yawTo(h, creep.px, creep.pz);
+    wantPitch = pitchTo(h, creep.px, creep.py + 0.9, creep.pz);
   } else {
     // Walk the lane, looking where it is going.
     wantYaw = h.team === Team.A ? YAW_STEPS / 4 : (YAW_STEPS * 3) / 4;
@@ -220,29 +263,32 @@ export function botInput(
     const aimed = Math.abs(((bot.aimYaw - wantYaw + YAW_STEPS * 1.5) % YAW_STEPS) - YAW_STEPS / 2);
     if (aimed < YAW_STEPS * 0.015 && orbDist < ECONOMY.SHOTGUN_ORB_WALL_M * 3) buttons |= Btn.Fire;
     moveZ = orbDist > 6 ? 1 : 0;
-  } else {
-    // Push the lane toward the nearest live enemy structure, and shoot it.
-    let goalX = forward * WORLD.MAP.CORE_X_ABS_M;
-    let goalZ = 0;
-    let nearestStruct = 1e9;
-    for (const st of s.structures) {
-      if (!st.alive || st.team === h.team) continue;
-      const d = dist(h, st.px / MM, st.pz / MM);
-      if (d < nearestStruct) {
-        nearestStruct = d;
-        goalX = st.px / MM;
-        goalZ = st.pz / MM;
-      }
-    }
-    if (nearestStruct < WORLD.STRUCTURES.TOWER_RANGE_M - 6) {
-      bot.aimYaw = yawStep(bot.aimYaw, yawTo(h, goalX, goalZ), 0.5);
-      bot.aimPitch = Math.round(bot.aimPitch * 0.7);
+  } else if (siegeTarget !== null && !bot.retreating) {
+    /**
+     * Siege. This branch must outrank clearing the wave, or a bot never
+     * commits: at mid there is almost always a creep inside weapon range, so
+     * creep-first means the lane grinds for the whole match and every structure
+     * finishes at 100%. Proximity to a live enemy structure is the signal that
+     * the push already happened and it is time to cash it in.
+     */
+    bot.aimYaw = yawStep(bot.aimYaw, yawTo(h, siegeTarget.x, siegeTarget.z), 0.5);
+    bot.aimPitch = Math.round(bot.aimPitch * 0.6);
+    if (siegeDist < WORLD.STRUCTURES.TOWER_RANGE_M - 4) {
       buttons |= Btn.Fire;
-      moveZ = 0;
+      moveZ = siegeDist > 12 ? 1 : 0;
     } else {
-      bot.aimYaw = yawStep(bot.aimYaw, yawTo(h, goalX, goalZ), 0.25);
       moveZ = 1;
     }
+  } else if (creep !== null && !bot.retreating) {
+    // Clear the wave — this is what creates the push the branch above cashes in.
+    const aimed = Math.abs(((bot.aimYaw - wantYaw + YAW_STEPS * 1.5) % YAW_STEPS) - YAW_STEPS / 2);
+    if (aimed < YAW_STEPS * 0.02) buttons |= Btn.Fire;
+    moveZ = creepDist > 10 ? 1 : 0; // follow the wave, never back off from it
+  } else {
+    // Nothing to do here: walk down the lane toward the enemy base.
+    const goalX = forward * WORLD.MAP.CORE_X_ABS_M;
+    bot.aimYaw = yawStep(bot.aimYaw, yawTo(h, goalX, 0), 0.25);
+    moveZ = 1;
   }
 
   if (bot.retreating) {
@@ -252,6 +298,33 @@ export function botInput(
     // that never uses it makes the whole mechanic look optional in the bench.
     if (h.dashCharges > 0 && enemy !== null && enemyDist < 14) buttons |= Btn.Dash;
     bot.aimYaw = yawStep(bot.aimYaw, (yawTo(h, h.px / MM - forward * 20, h.pz / MM) + 0) % YAW_STEPS, 0.3);
+  }
+
+  /**
+   * Stuck detection. A bot that walks into geometry and keeps pushing is the
+   * single most common way a bench silently stops measuring anything — the
+   * first version of this walked into its own core and stood there for the
+   * whole match, and every "no damage dealt" result looked like a balance
+   * problem rather than a pathing one.
+   */
+  bot.stuckCheckIn--;
+  if (bot.stuckCheckIn <= 0) {
+    bot.stuckCheckIn = 30;
+    const moved = Math.abs(h.px / MM - bot.lastX) + Math.abs(h.pz / MM - bot.lastZ);
+    const wantedToMove = moveX !== 0 || moveZ !== 0;
+    if (wantedToMove && moved < 0.6) {
+      bot.unstickTicks = 45;
+      bot.strafeSign = -bot.strafeSign;
+    }
+    bot.lastX = h.px / MM;
+    bot.lastZ = h.pz / MM;
+  }
+  if (bot.unstickTicks > 0) {
+    bot.unstickTicks--;
+    // Peel sideways and keep advancing: strafing alone can wedge in a corner.
+    moveX = bot.strafeSign;
+    if (bot.unstickTicks > 25) moveZ = 0;
+    if (h.grounded && bot.unstickTicks === 30) buttons |= Btn.Jump;
   }
 
   // Never stand perfectly still: a motionless capsule is neither fun to fight
@@ -266,8 +339,3 @@ export function botInput(
   };
 }
 
-export const BOT_SIN = sin;
-export const BOT_COS = cos;
-export const BOT_STRUCTURE_KIND = StructureKind;
-export const BOT_TICK_S = SPINE.TICK_S;
-export const BOT_DASH_CHARGES = MOVEMENT.DASH_CHARGES;

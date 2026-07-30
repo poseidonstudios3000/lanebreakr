@@ -8,7 +8,7 @@
  * catch-up, and that is how determinism dies quietly six weeks into netcode.
  */
 
-import { SPINE, ENTITY, MOVEMENT, ECONOMY, WORLD, M0, respawnTicks, suddenDeathDecayPerTick } from './balance.js';
+import { SPINE, ENTITY, MOVEMENT, ECONOMY, WORLD, COMBAT, M0, respawnTicks, suddenDeathDecayPerTick } from './balance.js';
 import {
   type WorldState, type HeroState, type TargetState, type PlayerInput,
   type TrooperState, type StructureState, type TeamState,
@@ -21,6 +21,8 @@ import { stepCombat } from './systems/combat.js';
 import { stepTroopers, markRetaliation } from './systems/troopers.js';
 import { stepEconomy, spawnOrb, grantSouls } from './systems/economy.js';
 import { stepStructures, structureMaxHp, onStructureDestroyed, markStructureAggro } from './systems/structures.js';
+import { updateVisibility, newVisibilityMemory, canSee, type VisibilityMemory } from './systems/visibility.js';
+import { botInput, makeBot, BOT_TIERS, type BotState, type BotTier } from './systems/bots.js';
 
 const MM = 1000;
 
@@ -33,6 +35,10 @@ export interface World {
   /** respawn countdowns, indexed by hero id */
   respawn: number[];
   deathsInSuddenDeath: number[];
+  /** §5.3's gate, shared by the renderer, the bots and peek-test */
+  vis: VisibilityMemory;
+  /** hero ids driven by AI. §10.5: bots are first-class, not a test fixture. */
+  bots: Map<number, BotState>;
 }
 
 export function createHero(id: number, team: Team, x: number, y: number, z: number, yaw: number): HeroState {
@@ -55,7 +61,7 @@ export function createHero(id: number, team: Team, x: number, y: number, z: numb
     spreadMilliDeg: 0, spreadDecayDelay: 0,
     recoilVertMilliDeg: 0, recoilHorizMilliDeg: 0, recoilRecoveryDelay: 0,
     shotsFired: 0, hitsLanded: 0, headshots: 0, damageDealt: 0,
-    prevButtons: 0, lastMoveX: 0, lastMoveZ: 0, noInputTicks: 0,
+    prevButtons: 0, lastDamagedTick: -99999, lastMoveX: 0, lastMoveZ: 0, noInputTicks: 0,
   };
 }
 
@@ -87,7 +93,9 @@ export function createWorld(matchSeed: number, mode: WorldMode = 'greybox'): Wor
     for (const team of [Team.A, Team.B]) {
       const sp = map.heroSpawn[team]!;
       for (let i = 0; i < 3; i++) {
-        heroes.push(createHero(nextId++, team, sp.x, sp.y, sp.z + (i - 1) * 2.5, sp.yaw));
+        // Cover blocks occupy |z| ∈ [4.5, 8.5]; stay inside that.
+        const lateral = [-2.5, 0, 2.5][i]!;
+        heroes.push(createHero(nextId++, team, sp.x, sp.y, sp.z + lateral, sp.yaw));
       }
     }
     for (const site of map.structures) {
@@ -125,8 +133,25 @@ export function createWorld(matchSeed: number, mode: WorldMode = 'greybox'): Wor
     mode,
     respawn: [],
     deathsInSuddenDeath: [],
+    vis: newVisibilityMemory(),
+    bots: new Map(),
   };
 }
+
+/** Put a bot on a hero slot. Backfill, practice mode and the bench all use this. */
+export function assignBot(w: World, heroId: number, tier: BotTier = BOT_TIERS.normal): void {
+  w.bots.set(heroId, makeBot(heroId, tier));
+}
+
+/** Every slot except `humanIds` gets a bot — the default single-player setup. */
+export function fillWithBots(w: World, humanIds: readonly number[], tier: BotTier = BOT_TIERS.normal): void {
+  for (const h of w.state.heroes) {
+    if (!humanIds.includes(h.id)) assignBot(w, h.id, tier);
+  }
+}
+
+export { BOT_TIERS, canSee };
+export type { BotTier };
 
 /**
  * The single damage router. Every source — bullets, troopers, towers, the boss
@@ -140,6 +165,7 @@ export function makeApplyDamage(w: World) {
       if (h.id !== targetId || !h.alive) continue;
       if (h.iframeTicksLeft > 0) return; // dash i-frames, evaluated at the rewound tick
       h.hp -= milliDamage;
+      h.lastDamagedTick = s.tick;
       if (attackerId >= 0) {
         markRetaliation(s, h, attackerId);
         markStructureAggro(s, h.team, h.px, h.pz, attackerId);
@@ -202,6 +228,24 @@ export function tick(world: World, inputs: readonly PlayerInput[]): void {
   s.events.length = 0;
   s.soulEvents.length = 0;
 
+  // Perception first, so bots act on this tick's sample rather than last
+  // tick's. Tick-locked inside, so this is cheap on the 3 ticks out of 4 it
+  // does nothing.
+  updateVisibility(s, world.vis, world.map.boxes);
+
+  // Bot inputs are appended, never substituted: a human input for the same id
+  // always wins, which is what makes disconnect-takeover a one-line change.
+  let allInputs: PlayerInput[] | readonly PlayerInput[] = inputs;
+  if (world.bots.size > 0) {
+    const merged = [...inputs];
+    for (const bot of world.bots.values()) {
+      if (merged.some((i) => i.entityId === bot.heroId)) continue;
+      merged.push(botInput(s, bot, world.vis, world.map.boxes, s.tick));
+    }
+    allInputs = merged;
+  }
+  inputs = allInputs;
+
   const applyDamage = makeApplyDamage(world);
 
   if (s.phase !== MatchPhase.Over && world.mode === 'strip' && s.tick >= SPINE.SUDDEN_DEATH_TICK) {
@@ -255,6 +299,13 @@ export function tick(world: World, inputs: readonly PlayerInput[]): void {
       h.noInputTicks = 0;
       h.lastMoveX = input.moveX;
       h.lastMoveZ = input.moveZ;
+    }
+
+    // §6.2: 2%/s after 5s out of combat. Note it is NOT gated on shooting a
+    // soul orb — §7 makes orbs the other sustain path, and treating a farm as
+    // "in combat" would delete the only in-lane recovery a healerless game has.
+    if (s.tick - h.lastDamagedTick >= COMBAT.REGEN_OUT_OF_COMBAT_TICKS && h.hp < h.maxHp) {
+      h.hp = Math.min(h.maxHp, h.hp + Math.round((h.maxHp * COMBAT.REGEN_FRAC_PER_S) / SPINE.SIM_HZ));
     }
 
     const prev = h.prevButtons;
