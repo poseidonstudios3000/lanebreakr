@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OVRRUN — M0 Feel Prototype</title>
+    <style>
+      :root {
+        --team-a: #00e5ff;
+        --team-b: #ff6b1f;
+        --soul: #ffd966;
+        --danger: #ff2e88;
+        --ink: #e8edf2;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; overflow: hidden; background: #0d1013; }
+      body {
+        font: 500 13px/1.4 ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+      }
+      canvas { display: block; }
+
+      #hud { position: fixed; inset: 0; pointer-events: none; }
+
+      /* Crosshair — dynamic, reads the actual sim spread cone. */
+      #cross { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+      #cross div {
+        position: absolute; background: #fff; opacity: .9;
+        box-shadow: 0 0 2px rgba(0,0,0,.9);
+      }
+      #cross .h { width: 9px; height: 2px; }
+      #cross .v { width: 2px; height: 9px; }
+      #cross.blocked div { background: var(--danger); opacity: .95; }
+      #dot {
+        position: absolute; left: 50%; top: 50%;
+        width: 2px; height: 2px; margin: -1px 0 0 -1px;
+        background: #fff; opacity: .55;
+      }
+
+      #hitmark {
+        position: absolute; left: 50%; top: 50%;
+        transform: translate(-50%,-50%) rotate(45deg);
+        opacity: 0; transition: opacity .1s linear;
+      }
+      #hitmark div { position: absolute; background: #fff; }
+      #hitmark.on { opacity: 1; transition: none; }
+      #hitmark.kill div { background: var(--danger); }
+
+      .panel {
+        position: absolute; padding: 10px 13px;
+        background: rgba(13,16,19,.72); border: 1px solid rgba(255,255,255,.08);
+        border-radius: 3px; backdrop-filter: blur(6px);
+      }
+      #stats { left: 16px; top: 16px; min-width: 208px; }
+      #stats b { color: var(--soul); font-weight: 600; }
+      #stats .row { display: flex; justify-content: space-between; gap: 18px; }
+      #stats .row + .row { margin-top: 2px; }
+      #stats .dim { color: #7c8894; }
+      #stats hr { border: 0; border-top: 1px solid rgba(255,255,255,.08); margin: 7px 0; }
+
+      #keys { left: 16px; bottom: 16px; color: #8b98a5; line-height: 1.75; }
+      #keys kbd {
+        display: inline-block; min-width: 19px; text-align: center;
+        padding: 1px 5px; margin-right: 6px;
+        background: rgba(255,255,255,.09); border: 1px solid rgba(255,255,255,.14);
+        border-bottom-width: 2px; border-radius: 3px;
+        color: var(--ink); font: inherit; font-size: 11px;
+      }
+
+      #ammo { right: 22px; bottom: 20px; text-align: right; }
+      #ammo .n { font-size: 34px; line-height: 1; letter-spacing: -1px; }
+      #ammo .n.low { color: var(--danger); }
+      #ammo .sub { color: #7c8894; margin-top: 3px; }
+      #reload { color: var(--soul); }
+
+      #dashes { right: 22px; bottom: 92px; display: flex; gap: 5px; justify-content: flex-end; }
+      #dashes i {
+        display: block; width: 30px; height: 4px; border-radius: 2px;
+        background: rgba(255,255,255,.16);
+      }
+      #dashes i.ready { background: var(--team-a); box-shadow: 0 0 7px rgba(0,229,255,.6); }
+
+      #mode {
+        left: 50%; bottom: 26px; transform: translateX(-50%);
+        letter-spacing: 2.5px; font-size: 11px; color: #8b98a5;
+      }
+      #mode b { color: var(--team-a); font-weight: 600; }
+
+      #start {
+        position: fixed; inset: 0; display: grid; place-items: center;
+        background: rgba(8,10,12,.9); pointer-events: auto; cursor: pointer;
+        text-align: center;
+      }
+      #start h1 {
+        font-size: 46px; letter-spacing: 9px; font-weight: 700;
+        color: var(--ink); margin-bottom: 6px;
+      }
+      #start .tag { color: var(--team-a); letter-spacing: 3px; font-size: 11px; }
+      #start .go { margin-top: 26px; color: #8b98a5; }
+      #start .go b { color: var(--ink); }
+      #start.hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <div id="cross">
+        <div class="h" id="cl"></div><div class="h" id="cr"></div>
+        <div class="v" id="ct"></div><div class="v" id="cb"></div>
+      </div>
+      <div id="dot"></div>
+      <div id="hitmark">
+        <div style="left:-9px;top:-1px;width:7px;height:2px"></div>
+        <div style="left:2px;top:-1px;width:7px;height:2px"></div>
+        <div style="left:-1px;top:-9px;width:2px;height:7px"></div>
+        <div style="left:-1px;top:2px;width:2px;height:7px"></div>
+      </div>
+
+      <div class="panel" id="stats"></div>
+      <div class="panel" id="keys">
+        <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp; <kbd>Space</kbd> jump / mantle<br />
+        <kbd>Shift</kbd> dash &nbsp; <kbd>C</kbd> slide &nbsp; <kbd>F</kbd> zipline<br />
+        <kbd>V</kbd> camera &nbsp; <kbd>RMB</kbd> ADS &nbsp; <kbd>R</kbd> reload<br />
+        <kbd>Esc</kbd> release cursor
+      </div>
+      <div class="panel" id="ammo">
+        <div class="n" id="ammoN">32</div>
+        <div class="sub" id="ammoSub">SMG · 720 RPM</div>
+      </div>
+      <div id="dashes"></div>
+      <div id="mode">CAMERA <b id="modeName">TPS</b></div>
+    </div>
+
+    <div id="start">
+      <div>
+        <h1>OVRRUN</h1>
+        <div class="tag">M0 · FEEL PROTOTYPE</div>
+        <div class="go">click to play &nbsp;·&nbsp; <b>is moving and shooting fun with zero content?</b></div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
