@@ -22,7 +22,7 @@ function strip(): World {
 }
 
 function input(over: Partial<PlayerInput> = {}): PlayerInput {
-  return { seq: 0, entityId: 0, moveX: 0, moveZ: 0, yaw: 2048, pitch: 0, buttons: 0, fireSubTick: 0, ...over };
+  return { seq: 0, entityId: 0, moveX: 0, moveZ: 0, yaw: 2048, pitch: 0, buttons: 0, action: 0, fireSubTick: 0, ...over };
 }
 
 describe('glitch bomb — the mechanic', () => {
@@ -192,7 +192,7 @@ describe('glitch bomb — the design bar it must not cross', () => {
         const buttons = t % 400 === 0 ? Btn.AbilityQ : (t % 9 === 0 ? Btn.Fire : 0);
         tick(w, [
           { seq: t, entityId: 0, moveX: (t % 7) - 3, moveZ: 1, yaw: (t * 11) % 8192, pitch: 0, buttons, fireSubTick: 0 },
-          { seq: t, entityId: 3, moveX: 0, moveZ: 1, yaw: (t * 5) % 8192, pitch: 0, buttons: t % 500 === 0 ? Btn.AbilityQ : 0, fireSubTick: 0 },
+          { seq: t, entityId: 3, moveX: 0, moveZ: 1, yaw: (t * 5) % 8192, pitch: 0, buttons: t % 500 === 0 ? Btn.AbilityQ : 0, action: 0, fireSubTick: 0 },
         ]);
       }
       return hashState(w.state);

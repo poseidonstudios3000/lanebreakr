@@ -46,6 +46,47 @@
       @keyframes gslide { to { transform: translateY(4px); } }
       @keyframes gjump  { 50% { transform: translateX(5px) skewX(-1.2deg); } }
 
+      /* Social wheel. Hold Z (ping) or X (emote), pick with the mouse or 1-6. */
+      #wheel {
+        position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%);
+        width: 320px; height: 320px; display: none; z-index: 6;
+      }
+      #wheel.on { display: block; }
+      #wheel .slice {
+        position: absolute; left: 50%; top: 50%;
+        width: 104px; margin-left: -52px; margin-top: -17px;
+        padding: 7px 0; text-align: center; font-size: 11px; letter-spacing: 1.2px;
+        background: rgba(13,16,19,.86); border: 1px solid rgba(255,255,255,.14);
+        border-radius: 3px; color: #9aa6b2;
+      }
+      #wheel .slice.sel {
+        background: rgba(0,229,255,.18); border-color: var(--team-a);
+        color: var(--ink); box-shadow: 0 0 14px rgba(0,229,255,.35);
+      }
+      #wheel.emote .slice.sel { background: rgba(255,217,102,.18); border-color: var(--soul); box-shadow: 0 0 14px rgba(255,217,102,.35); }
+      #wheelHint {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+        font-size: 10px; letter-spacing: 2px; color: #55616d;
+      }
+
+      /* Emote bubbles + ping markers, projected from world space. */
+      .worldTag {
+        position: fixed; transform: translate(-50%,-50%);
+        font-size: 11px; letter-spacing: 1.5px; padding: 4px 9px;
+        border-radius: 3px; pointer-events: none; white-space: nowrap;
+        background: rgba(13,16,19,.8); border: 1px solid rgba(255,255,255,.16);
+        z-index: 4;
+      }
+      .worldTag.emote { color: var(--soul); border-color: rgba(255,217,102,.5); }
+      .worldTag.ping { color: var(--team-a); border-color: rgba(0,229,255,.5); }
+
+      #wheelBudget {
+        position: absolute; left: 50%; bottom: 52px; transform: translateX(-50%);
+        display: flex; gap: 4px;
+      }
+      #wheelBudget i { display: block; width: 14px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.16); }
+      #wheelBudget i.on { background: var(--soul); }
+
       #qcd {
         position: absolute; right: 22px; bottom: 118px; text-align: right;
         color: #8b98a5;
@@ -138,6 +179,9 @@
          mechanical penalty and drops the distortion. -->
     <div id="glitch"><div id="glitchScan"></div><div id="glitchBars"></div></div>
 
+    <div id="wheel"><div id="wheelHint"></div></div>
+    <div id="worldTags"></div>
+
     <div id="hud">
       <div id="cross">
         <div class="h" id="cl"></div><div class="h" id="cr"></div>
@@ -157,7 +201,8 @@
         <kbd>Shift</kbd> dash &nbsp; <kbd>C</kbd> slide &nbsp; <kbd>F</kbd> zipline<br />
         <kbd>V</kbd> camera &nbsp; <kbd>RMB</kbd> hold to ADS &nbsp; <kbd>R</kbd> reload<br />
         <kbd>Q</kbd> glitch bomb &nbsp; <kbd>MMB</kbd> melee<br />
-        <kbd>M</kbd> mute &nbsp; <kbd>G</kbd> reduced effects &nbsp; <kbd>Esc</kbd> cursor
+        <kbd>Z</kbd> ping wheel &nbsp; <kbd>X</kbd> emote wheel &nbsp; <kbd>M</kbd> mute<br />
+        <kbd>G</kbd> reduced effects &nbsp; <kbd>Esc</kbd> cursor
       </div>
       <div class="panel" id="ammo">
         <div class="n" id="ammoN">32</div>
@@ -165,6 +210,7 @@
       </div>
       <div id="dashes"></div>
       <div id="qcd"><b>Q</b> <span id="qcdVal">GLITCH</span></div>
+      <div id="wheelBudget"></div>
       <div id="mode">CAMERA <b id="modeName">TPS</b></div>
     </div>
 

@@ -9,7 +9,7 @@
  * reads as netcode for weeks.
  */
 
-import { Btn, YAW_STEPS, PITCH_LIMIT, type PlayerInput } from '@ovrrun/sim';
+import { Btn, Action, YAW_STEPS, PITCH_LIMIT, type PlayerInput } from '@ovrrun/sim';
 
 const MOUSE_SENS = 0.0022; // radians per pixel at 1.0 in-game sensitivity
 const TAU = Math.PI * 2;
@@ -20,7 +20,18 @@ export class Input {
   private yawF = 0; // full-precision, accumulates mouse deltas
   private pitchF = 0;
   private seq = 0;
+  private wheelDx = 0;
+  private wheelDy = 0;
   locked = false;
+
+  /**
+   * The social wheel. Hold Z for pings, X for emotes, then pick with 1–6 or by
+   * releasing on a direction. Held-open-then-pick rather than a menu, because
+   * the whole feature is worthless if using it costs you the fight.
+   */
+  wheelOpen: '' | 'ping' | 'emote' = '';
+  wheelIndex = -1;
+  private pendingAction = 0;
 
   /** Recoil the client adds to the view, in radians. Set from sim state. */
   viewRecoilPitch = 0;
@@ -32,8 +43,33 @@ export class Input {
     addEventListener('keydown', (e) => {
       this.keys.add(e.code);
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+
+      if (e.code === 'KeyZ') this.wheelOpen = 'ping';
+      else if (e.code === 'KeyX') this.wheelOpen = 'emote';
+
+      if (this.wheelOpen !== '' && e.code.startsWith('Digit')) {
+        const n = Number(e.code.slice(5));
+        if (n >= 1 && n <= 6) {
+          this.pendingAction = this.wheelOpen === 'emote'
+            ? Action.EmoteWave + (n - 1)
+            : Action.PingEnemy + (n - 1);
+          this.wheelOpen = '';
+        }
+      }
     });
-    addEventListener('keyup', (e) => this.keys.delete(e.code));
+    addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+      // Release with a direction chosen commits it — the fast path.
+      if ((e.code === 'KeyZ' || e.code === 'KeyX') && this.wheelOpen !== '') {
+        if (this.wheelIndex >= 0) {
+          this.pendingAction = this.wheelOpen === 'emote'
+            ? Action.EmoteWave + this.wheelIndex
+            : Action.PingEnemy + this.wheelIndex;
+        }
+        this.wheelOpen = '';
+        this.wheelIndex = -1;
+      }
+    });
     addEventListener('blur', () => { this.keys.clear(); this.mouseButtons = 0; });
 
     canvas.addEventListener('mousedown', (e) => { this.mouseButtons |= 1 << e.button; });
@@ -42,6 +78,20 @@ export class Input {
 
     addEventListener('mousemove', (e) => {
       if (!this.locked) return;
+      if (this.wheelOpen !== '') {
+        // While the wheel is open the mouse picks a slice instead of aiming.
+        this.wheelDx += e.movementX;
+        this.wheelDy += e.movementY;
+        const r = Math.sqrt(this.wheelDx ** 2 + this.wheelDy ** 2);
+        if (r > 30) {
+          const ang = Math.atan2(this.wheelDx, -this.wheelDy);
+          this.wheelIndex = ((Math.round((ang / (Math.PI * 2)) * 6) % 6) + 6) % 6;
+        } else {
+          this.wheelIndex = -1;
+        }
+        return;
+      }
+      this.wheelDx = 0; this.wheelDy = 0;
       this.yawF += e.movementX * MOUSE_SENS;
       this.pitchF -= e.movementY * MOUSE_SENS;
       const lim = (PITCH_LIMIT / (YAW_STEPS / 2)) * Math.PI * 0.5;
@@ -110,6 +160,7 @@ export class Input {
       yaw,
       pitch,
       buttons,
+      action: (() => { const a = this.pendingAction; this.pendingAction = 0; return a; })(),
       fireSubTick: 0,
     };
   }

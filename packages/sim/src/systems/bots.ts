@@ -126,7 +126,7 @@ export function botInput(
   const h = s.heroes.find((x) => x.id === bot.heroId);
   const idle: PlayerInput = {
     seq, entityId: bot.heroId, moveX: 0, moveZ: 0,
-    yaw: bot.aimYaw, pitch: bot.aimPitch, buttons: 0, fireSubTick: 0,
+    yaw: bot.aimYaw, pitch: bot.aimPitch, buttons: 0, action: 0, fireSubTick: 0,
   };
   if (h === undefined || !h.alive || s.phase === MatchPhase.Over) return idle;
 
@@ -331,11 +331,21 @@ export function botInput(
   // nor representative of a human for benchmarking purposes.
   if (moveX === 0 && moveZ === 0 && rng.below(100) < 4) moveX = rng.below(3) - 1;
 
+  /**
+   * Bots emote. This is not decoration: §9's whole thesis is clip generation,
+   * and a bot that taunts after a kill produces the same moment a human would.
+   * Rate-limited by the sim's shared wheel budget like everyone else.
+   */
+  let action = 0;
+  if (!bot.retreating && enemy === null && rng.below(400) === 0) {
+    action = 1 + rng.below(6); // Action.EmoteWave .. EmoteSit
+  }
+
   return {
     seq, entityId: bot.heroId,
     moveX, moveZ,
     yaw: bot.aimYaw, pitch: bot.aimPitch,
-    buttons, fireSubTick: 0,
+    buttons, action, fireSubTick: 0,
   };
 }
 

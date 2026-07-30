@@ -61,6 +61,51 @@ export const enum Btn {
 }
 
 /**
+ * The social wheel. §1.4 makes pings the fog-of-war replacement, so a wheel has
+ * to exist regardless — emotes ride the same input field, the same wire bits
+ * and the same UI, which is why they were pulled forward rather than deferred.
+ *
+ * One `action` byte rather than more button bits: a 6-bit id is cheaper than
+ * twelve flags and it extends without touching the packet layout again.
+ */
+export const enum Action {
+  None = 0,
+  // --- emotes: the highest clip-per-byte feature available -----------------
+  EmoteWave = 1,
+  EmoteDance = 2,
+  EmoteTaunt = 3,
+  EmoteLaugh = 4,
+  EmoteSalute = 5,
+  EmoteSit = 6,
+  // --- pings: teammate-only, and the fog-of-war replacement ----------------
+  PingEnemy = 16,
+  PingDanger = 17,
+  PingOnMyWay = 18,
+  PingObjective = 19,
+  PingSouls = 20,
+  PingHelp = 21,
+}
+
+export function isEmote(a: number): boolean {
+  return a >= Action.EmoteWave && a <= Action.EmoteSit;
+}
+export function isPing(a: number): boolean {
+  return a >= Action.PingEnemy && a <= Action.PingHelp;
+}
+
+/** A world-space ping marker. Team-visible only. */
+export interface PingState {
+  id: EntityId;
+  team: Team;
+  fromId: EntityId;
+  kind: number;
+  px: number;
+  py: number;
+  pz: number;
+  ticksLeft: number;
+}
+
+/**
  * One player's input for one tick. 8 bytes on the wire.
  * `moveX`/`moveZ` are ternary (−1, 0, 1) — 2 bits each.
  * `yaw`/`pitch` arrive ALREADY QUANTISED. The client must quantise before
@@ -75,6 +120,8 @@ export interface PlayerInput {
   yaw: number;
   pitch: number;
   buttons: number;
+  /** Wheel selection this tick. See `Action`. 0 when nothing was chosen. */
+  action: number;
   /** Which 1/60 slice of the tick the fire press landed on, 0–31. */
   fireSubTick: number;
 }
@@ -159,6 +206,14 @@ export interface HeroState {
   /** Last movement axes, and how long we have gone without a fresh input.
    *  PRD §10.4: a missing input repeats the last one for <=3 ticks, then zeroes
    *  the movement axes while holding view angles. It NEVER freezes the entity. */
+  /** Emote currently playing, and how long is left of it. */
+  emote: number;
+  emoteTicksLeft: number;
+  /** Rate limit, shared by emotes and pings — one budget, one spam surface. */
+  wheelCooldown: number;
+  wheelBudget: number;
+  wheelRefillIn: number;
+
   /** GLITCH BOMB. `glitchSeed` makes the scramble reproducible under rewind. */
   glitchTicksLeft: number;
   glitchSeed: number;
@@ -347,6 +402,7 @@ export interface WorldState {
   orbs: OrbState[];
   structures: StructureState[];
   glitches: GlitchState[];
+  pings: PingState[];
   /** indexed by Team.A / Team.B; Team.Neutral never has one */
   teams: TeamState[];
   nextWaveTick: number;

@@ -27,7 +27,7 @@ const LANE_Z = 15;
 const MM = 1000;
 
 function input(over: Partial<PlayerInput> = {}): PlayerInput {
-  return { seq: 0, entityId: 0, moveX: 0, moveZ: 0, yaw: 0, pitch: 0, buttons: 0, fireSubTick: 0, ...over };
+  return { seq: 0, entityId: 0, moveX: 0, moveZ: 0, yaw: 0, pitch: 0, buttons: 0, action: 0, fireSubTick: 0, ...over };
 }
 
 function run(w: World, n: number, mk: (t: number) => PlayerInput): void {

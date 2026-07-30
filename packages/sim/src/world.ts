@@ -23,6 +23,7 @@ import { stepEconomy, spawnOrb, grantSouls } from './systems/economy.js';
 import { stepStructures, structureMaxHp, onStructureDestroyed, markStructureAggro } from './systems/structures.js';
 import { updateVisibility, newVisibilityMemory, canSee, type VisibilityMemory } from './systems/visibility.js';
 import { stepGlitch, castGlitch, scrambleInput } from './systems/glitch.js';
+import { stepSocial, applyAction, cancelEmote, SOCIAL } from './systems/social.js';
 import { botInput, makeBot, BOT_TIERS, type BotState, type BotTier } from './systems/bots.js';
 
 const MM = 1000;
@@ -62,6 +63,8 @@ export function createHero(id: number, team: Team, x: number, y: number, z: numb
     spreadMilliDeg: 0, spreadDecayDelay: 0,
     recoilVertMilliDeg: 0, recoilHorizMilliDeg: 0, recoilRecoveryDelay: 0,
     shotsFired: 0, hitsLanded: 0, headshots: 0, damageDealt: 0,
+    emote: 0, emoteTicksLeft: 0,
+    wheelCooldown: 0, wheelBudget: SOCIAL.WHEEL_BUDGET, wheelRefillIn: SOCIAL.WHEEL_REFILL_TICKS,
     glitchTicksLeft: 0, glitchSeed: 0, abilityQCooldown: 0,
     prevButtons: 0, lastDamagedTick: -99999, lastMoveX: 0, lastMoveZ: 0, noInputTicks: 0,
   };
@@ -124,7 +127,7 @@ export function createWorld(matchSeed: number, mode: WorldMode = 'greybox'): Wor
       tick: 0, matchSeed,
       phase: mode === 'strip' ? MatchPhase.Live : MatchPhase.Warmup,
       winner: -1,
-      heroes, troopers: [], orbs: [], structures, glitches: [],
+      heroes, troopers: [], orbs: [], structures, glitches: [], pings: [],
       teams: [emptyTeam(), emptyTeam()],
       nextWaveTick: WORLD.TROOPERS.FIRST_WAVE_TICK,
       waveIndex: 0,
@@ -168,6 +171,7 @@ export function makeApplyDamage(w: World) {
       if (h.iframeTicksLeft > 0) return; // dash i-frames, evaluated at the rewound tick
       h.hp -= milliDamage;
       h.lastDamagedTick = s.tick;
+      if (SOCIAL.EMOTE_CANCELS_ON_DAMAGE) cancelEmote(h);
       if (attackerId >= 0) {
         markRetaliation(s, h, attackerId);
         markStructureAggro(s, h.team, h.px, h.pz, attackerId);
@@ -294,7 +298,7 @@ export function tick(world: World, inputs: readonly PlayerInput[]): void {
         moveX: stale ? 0 : h.lastMoveX,
         moveZ: stale ? 0 : h.lastMoveZ,
         yaw: h.yaw, pitch: h.pitch,
-        buttons: stale ? 0 : h.prevButtons,
+        buttons: stale ? 0 : h.prevButtons, action: 0,
         fireSubTick: 0,
       };
     } else {
@@ -309,6 +313,12 @@ export function tick(world: World, inputs: readonly PlayerInput[]): void {
     if (s.tick - h.lastDamagedTick >= COMBAT.REGEN_OUT_OF_COMBAT_TICKS && h.hp < h.maxHp) {
       h.hp = Math.min(h.maxHp, h.hp + Math.round((h.maxHp * COMBAT.REGEN_FRAC_PER_S) / SPINE.SIM_HZ));
     }
+
+    // Social wheel. Runs before the glitch scramble on purpose: a glitched
+    // player can still emote, which is the funniest possible use of the two
+    // seconds and exactly the kind of moment §9 exists to capture.
+    if (input.action !== 0) applyAction(s, h, input, world.map.boxes);
+    if (SOCIAL.EMOTE_CANCELS_ON_FIRE && (input.buttons & Btn.Fire) !== 0) cancelEmote(h);
 
     const prevInput = h.prevButtons;
     // GLITCH BOMB. Cast reads the RAW input (you can always try to throw one),
@@ -334,6 +344,7 @@ export function tick(world: World, inputs: readonly PlayerInput[]): void {
 
   if (world.mode === 'strip') {
     stepGlitch(s, applyDamage);
+    stepSocial(s);
     stepTroopers(s, world.map.trooperSpawn, applyDamage);
     stepStructures(s, applyDamage);
     stepEconomy(s);
@@ -405,6 +416,7 @@ export function hashState(s: WorldState): number {
     push(h.spreadMilliDeg); push(h.recoilVertMilliDeg); push(h.recoilHorizMilliDeg);
     push(h.shotsFired); push(h.hitsLanded); push(h.headshots); push(h.damageDealt);
     push(h.glitchTicksLeft); push(h.glitchSeed); push(h.abilityQCooldown);
+    push(h.emote); push(h.emoteTicksLeft); push(h.wheelBudget); push(h.wheelCooldown);
     push(h.prevButtons);
   }
   for (const t of s.troopers) {

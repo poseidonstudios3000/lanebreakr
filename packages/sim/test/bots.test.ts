@@ -201,7 +201,7 @@ describe('bots', () => {
     const startX = h.px;
     const humanInput: PlayerInput = {
       seq: 0, entityId: 0, moveX: 0, moveZ: -1,
-      yaw: 2048, pitch: 0, buttons: 0, fireSubTick: 0,
+      yaw: 2048, pitch: 0, buttons: 0, action: 0, fireSubTick: 0,
     };
     for (let i = 0; i < 60; i++) tick(w, [humanInput]);
     // yaw 2048 is +X, moveZ −1 is backwards ⇒ the hero must travel −X.

@@ -373,7 +373,7 @@ describe('M2 — determinism holds with the full entity set', () => {
         moveZ: ((t / (11 + id)) | 0) % 3 - 1,
         yaw: (t * (13 + id)) % 8192,
         pitch: ((t * 5) % 600) - 300,
-        buttons: (t % (5 + id) === 0 ? Btn.Fire : 0) | (t % 137 === 0 ? Btn.Dash : 0),
+        buttons: (t % (5 + id) === 0 ? Btn.Fire : 0) | (t % 137 === 0 ? Btn.Dash : 0), action: 0,
         fireSubTick: 0,
       }));
 
@@ -422,9 +422,9 @@ describe('M2 — the greybox range still works', () => {
     const t = w.state.targets[0]!;
     t.px = 0; t.py = 0; t.pz = 15 * MM;
     h.px = -15 * MM; h.py = Math.round(0.05 * MM); h.pz = 15 * MM;
-    run(w, 30, [{ seq: 0, entityId: 0, moveX: 0, moveZ: 0, yaw: 2048, pitch: 0, buttons: 0, fireSubTick: 0 }]);
+    run(w, 30, [{ seq: 0, entityId: 0, moveX: 0, moveZ: 0, yaw: 2048, pitch: 0, buttons: 0, action: 0, fireSubTick: 0 }]);
     for (let i = 0; i < 400 && t.alive; i++) {
-      tick(w, [{ seq: i, entityId: 0, moveX: 0, moveZ: 0, yaw: 2048, pitch: 0, buttons: Btn.Fire, fireSubTick: 0 }]);
+      tick(w, [{ seq: i, entityId: 0, moveX: 0, moveZ: 0, yaw: 2048, pitch: 0, buttons: Btn.Fire, action: 0, fireSubTick: 0 }]);
     }
     expect(t.alive).toBe(false);
     expect(COMBAT.SMG.DAMAGE).toBe(38);

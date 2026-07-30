@@ -10,12 +10,14 @@
 
 import {
   createWorld, tick, fillWithBots, BOT_TIERS, SPINE, CAMERA, COMBAT, MOVEMENT, CameraMode,
+  EMOTE_NAMES, PING_NAMES, SOCIAL, visiblePings,
   currentSpreadDeg, muzzleBlocked, aimDir, ENTITY, type HitEvent,
 } from '@ovrrun/sim';
 import { Scene } from './render/scene.js';
 import { Input } from './input/input.js';
 import { CameraRig } from './input/camera.js';
 import { AudioEngine } from './audio/audio.js';
+import * as THREE from 'three';
 
 const MM = 1000;
 const HERO_ID = 0;
@@ -85,12 +87,32 @@ const el = {
   glitch: document.getElementById('glitch')!,
   qcd: document.getElementById('qcd')!,
   qcdVal: document.getElementById('qcdVal')!,
+  wheel: document.getElementById('wheel')!,
+  wheelHint: document.getElementById('wheelHint')!,
+  worldTags: document.getElementById('worldTags')!,
+  wheelBudget: document.getElementById('wheelBudget')!,
 };
 
 for (let i = 0; i < MOVEMENT.DASH_CHARGES; i++) {
   el.dashes.appendChild(document.createElement('i'));
 }
 const dashPips = Array.from(el.dashes.children) as HTMLElement[];
+
+// --- social wheel -----------------------------------------------------------
+const EMOTES = ['WAVE', 'DANCE', 'TAUNT', 'LAUGH', 'SALUTE', 'SIT'];
+const PINGS = ['ENEMY', 'DANGER', 'ON MY WAY', 'OBJECTIVE', 'SOULS', 'HELP'];
+const wheelSlices: HTMLElement[] = [];
+for (let i = 0; i < 6; i++) {
+  const d = document.createElement('div');
+  d.className = 'slice';
+  const ang = (i / 6) * Math.PI * 2;
+  d.style.transform = `translate(${Math.sin(ang) * 112}px, ${-Math.cos(ang) * 112}px)`;
+  el.wheel.appendChild(d);
+  wheelSlices.push(d);
+}
+for (let i = 0; i < SOCIAL.WHEEL_BUDGET; i++) el.wheelBudget.appendChild(document.createElement('i'));
+const budgetPips = Array.from(el.wheelBudget.children) as HTMLElement[];
+const tagPool: HTMLElement[] = [];
 
 // --- interpolation state ----------------------------------------------------
 let prevX = hero.px / MM, prevY = hero.py / MM, prevZ = hero.pz / MM;
@@ -228,6 +250,8 @@ function frame(now: number): void {
     scene.camera.rotation.z = 0;
   }
 
+  updateWheel();
+  updateWorldTags();
   updateCrosshair(viewPitch);
   updateHud(frameMs);
 }
@@ -335,6 +359,54 @@ function updateAudio(events: readonly HitEvent[], dt: number, hx: number, hy: nu
   void hx; void hy; void hz;
 }
 
+function updateWheel(): void {
+  const open = input.wheelOpen !== '';
+  el.wheel.classList.toggle('on', open);
+  el.wheel.classList.toggle('emote', input.wheelOpen === 'emote');
+  if (!open) return;
+  const names = input.wheelOpen === 'emote' ? EMOTES : PINGS;
+  el.wheelHint.textContent = input.wheelOpen === 'emote' ? 'EMOTE' : 'PING';
+  for (let i = 0; i < 6; i++) {
+    wheelSlices[i]!.textContent = names[i]!;
+    wheelSlices[i]!.classList.toggle('sel', input.wheelIndex === i);
+  }
+}
+
+/**
+ * Emote bubbles and ping markers, projected from world space to the screen.
+ * Pings are drawn ONLY for your own team — §1.4 makes them the fog-of-war
+ * replacement, which makes them information, and information leaking to the
+ * enemy is not a social feature.
+ */
+function updateWorldTags(): void {
+  let n = 0;
+  const put = (x: number, y: number, z: number, text: string, cls: string): void => {
+    const v = new THREE.Vector3(x, y, z).project(scene.camera);
+    if (v.z > 1) return;
+    let tag = tagPool[n];
+    if (tag === undefined) {
+      tag = document.createElement('div');
+      el.worldTags.appendChild(tag);
+      tagPool[n] = tag;
+    }
+    n++;
+    tag.className = `worldTag ${cls}`;
+    tag.style.display = 'block';
+    tag.style.left = `${(v.x * 0.5 + 0.5) * innerWidth}px`;
+    tag.style.top = `${(-v.y * 0.5 + 0.5) * innerHeight}px`;
+    tag.textContent = text;
+  };
+
+  for (const o of world.state.heroes) {
+    if (!o.alive || o.emoteTicksLeft <= 0) continue;
+    put(o.px / MM, o.py / MM + 2.4, o.pz / MM, EMOTE_NAMES[o.emote] ?? '', 'emote');
+  }
+  for (const p of visiblePings(world.state, hero.team)) {
+    put(p.px / MM, p.py / MM + 0.6, p.pz / MM, PING_NAMES[p.kind] ?? 'PING', 'ping');
+  }
+  for (let i = n; i < tagPool.length; i++) tagPool[i]!.style.display = 'none';
+}
+
 function updateCrosshair(_viewPitch: number): void {
   // The crosshair IS the spread cone, projected. If it lies, the gun feels
   // broken even when the numbers are right.
@@ -363,6 +435,10 @@ function updateHud(frameMs: number): void {
   el.ammoSub.innerHTML = hero.reloadTicksLeft > 0
     ? '<span id="reload">RELOADING</span>'
     : `SMG · ${(60 / COMBAT.SMG.FIRE_INTERVAL_TICKS * 60).toFixed(0)} RPM`;
+
+  for (let i = 0; i < budgetPips.length; i++) {
+    budgetPips[i]!.classList.toggle('on', i < hero.wheelBudget);
+  }
 
   for (let i = 0; i < dashPips.length; i++) {
     dashPips[i]!.classList.toggle('ready', i < hero.dashCharges);
