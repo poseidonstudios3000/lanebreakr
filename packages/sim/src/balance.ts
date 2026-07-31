@@ -913,3 +913,34 @@ export function suddenDeathDecayPerTick(matchTick: number, isStructureLeader: bo
   const perSec = sd.DECAY_FRAC_PER_S + sd.DECAY_RAMP_FRAC_PER_S_PER_MIN * (overtimeS / 60);
   return (perSec * (isStructureLeader ? sd.DECAY_LEADER_MULT : sd.DECAY_TRAILER_MULT)) / SPINE.SIM_HZ;
 }
+
+/**
+ * A stable hash over every tunable in this file.
+ *
+ * A `.ovr` replay is its input log, which only reproduces against the sim AND
+ * the numbers it was recorded with. Pinning this in the replay header is what
+ * lets playback refuse on mismatch rather than render a subtly wrong match —
+ * and a replay that silently diverges is worse than one that will not open,
+ * because you cannot tell which frames were real.
+ *
+ * Computed from a canonical key-sorted serialisation, so reordering this file
+ * does not change the hash but changing a value always does.
+ */
+export function balanceHash(): number {
+  const canon = (v: unknown): string => {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+    if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map((k) => `${k}:${canon(o[k])}`).join(',')}}`;
+  };
+  const src = canon({ SPINE, ENTITY, MOVEMENT, CAMERA, COMBAT, ECONOMY, WORLD, GLITCH, M0 });
+  let h = 0x811c9dc5;
+  for (let i = 0; i < src.length; i++) {
+    h ^= src.charCodeAt(i) & 0xff;
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** Bumped by hand when tick() changes shape. Pinned into every replay. */
+export const BUILD_HASH = 0x00030001; // M3.1

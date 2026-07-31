@@ -14,3 +14,6 @@ replays/
 .DS_Store
 .env
 .env.local
+
+# recorded replays (the format is code; the recordings are not)
+replays/

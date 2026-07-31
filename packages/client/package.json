@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@ovrrun/sim": "workspace:*",
-    "three": "^0.169.0"
+    "three": "^0.169.0",
+    "@ovrrun/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/three": "^0.169.0"

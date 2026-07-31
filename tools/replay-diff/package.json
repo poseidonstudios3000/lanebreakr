@@ -1,0 +1,8 @@
+{
+  "name": "@ovrrun/replay-diff",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@ovrrun/sim": "workspace:*", "@ovrrun/protocol": "workspace:*" },
+  "scripts": { "start": "tsx src/main.ts" }
+}

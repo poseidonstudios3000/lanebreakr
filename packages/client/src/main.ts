@@ -18,6 +18,8 @@ import { Input } from './input/input.js';
 import { CameraRig } from './input/camera.js';
 import { AudioEngine } from './audio/audio.js';
 import * as THREE from 'three';
+import { OvrRecorder } from '@ovrrun/protocol';
+import { balanceHash, BUILD_HASH } from '@ovrrun/sim';
 
 const MM = 1000;
 const HERO_ID = 0;
@@ -62,6 +64,7 @@ addEventListener('keydown', (e) => {
     reducedEffects = !reducedEffects;
     localStorage.setItem('ovrrun.reducedEffects', reducedEffects ? '1' : '0');
   }
+  if (e.code === 'F9') { e.preventDefault(); exportClip(); }
   if (e.code === 'KeyM') {
     audio.muted = !audio.muted;
     if (audio.muted) audio.stopLoop('zip');
@@ -113,6 +116,38 @@ for (let i = 0; i < 6; i++) {
 for (let i = 0; i < SOCIAL.WHEEL_BUDGET; i++) el.wheelBudget.appendChild(document.createElement('i'));
 const budgetPips = Array.from(el.wheelBudget.children) as HTMLElement[];
 const tagPool: HTMLElement[] = [];
+
+/**
+ * Replay recording. Always on, trimmed to a rolling window — §9.1's "F9 exports
+ * the last 20 seconds".
+ *
+ * Because §10.3 guarantees the sim is reproducible, this is the input log
+ * rather than a snapshot ring buffer: ~2.9 KB/s for six players against the
+ * ~10 KB/s the snapshot design would have cost, and it needs no server.
+ */
+const CLIP_SECONDS = 20;
+const recorder = new OvrRecorder(0xc0ffee, BUILD_HASH, balanceHash(), world.state.heroes.length);
+
+function exportClip(): void {
+  const bytes = recorder.encode();
+  const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `clip-${world.state.tick}.ovr`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`CLIP SAVED · ${(bytes.length / 1024).toFixed(0)} KB · ${recorder.ticks} ticks`);
+}
+
+let toastTimer = 0;
+function toast(text: string): void {
+  const el2 = document.getElementById('toast')!;
+  el2.textContent = text;
+  el2.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el2.classList.remove('on'), 2600) as unknown as number;
+}
 
 // --- interpolation state ----------------------------------------------------
 let prevX = hero.px / MM, prevY = hero.py / MM, prevZ = hero.pz / MM;
@@ -183,7 +218,12 @@ function frame(now: number): void {
   let steps = 0;
   while (acc >= STEP_MS && steps < MAX_STEPS) {
     prevX = hero.px / MM; prevY = hero.py / MM; prevZ = hero.pz / MM;
-    tick(world, [input.sample(HERO_ID)]);
+    const sampled = input.sample(HERO_ID);
+    // Record what the local player actually sent. Bot inputs are regenerated
+    // deterministically on playback from the same seed, so they are not stored.
+    recorder.record([sampled]);
+    recorder.trimTo(CLIP_SECONDS * SPINE.SIM_HZ);
+    tick(world, [sampled]);
     currX = hero.px / MM; currY = hero.py / MM; currZ = hero.pz / MM;
     for (const e of world.state.events) pendingEvents.push(e);
     acc -= STEP_MS;

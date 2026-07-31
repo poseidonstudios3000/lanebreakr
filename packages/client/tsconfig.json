@@ -7,5 +7,5 @@
     "types": ["vite/client"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../sim" }]
+  "references": [{ "path": "../sim" }, { "path": "../protocol" }]
 }

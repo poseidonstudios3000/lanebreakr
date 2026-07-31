@@ -87,6 +87,15 @@
       #wheelBudget i { display: block; width: 14px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.16); }
       #wheelBudget i.on { background: var(--soul); }
 
+      #toast {
+        position: fixed; left: 50%; top: 76px; transform: translateX(-50%);
+        padding: 9px 16px; border-radius: 3px; z-index: 8;
+        background: rgba(13,16,19,.9); border: 1px solid var(--soul);
+        color: var(--soul); font-size: 11px; letter-spacing: 2px;
+        opacity: 0; transition: opacity .25s ease;
+      }
+      #toast.on { opacity: 1; }
+
       #qcd {
         position: absolute; right: 22px; bottom: 118px; text-align: right;
         color: #8b98a5;
@@ -179,6 +188,7 @@
          mechanical penalty and drops the distortion. -->
     <div id="glitch"><div id="glitchScan"></div><div id="glitchBars"></div></div>
 
+    <div id="toast"></div>
     <div id="wheel"><div id="wheelHint"></div></div>
     <div id="worldTags"></div>
 
@@ -202,7 +212,7 @@
         <kbd>V</kbd> camera &nbsp; <kbd>RMB</kbd> hold to ADS &nbsp; <kbd>R</kbd> reload<br />
         <kbd>Q</kbd> glitch bomb &nbsp; <kbd>MMB</kbd> melee<br />
         <kbd>Z</kbd> ping wheel &nbsp; <kbd>X</kbd> emote wheel &nbsp; <kbd>M</kbd> mute<br />
-        <kbd>G</kbd> reduced effects &nbsp; <kbd>Esc</kbd> cursor
+        <kbd>F9</kbd> save clip &nbsp; <kbd>G</kbd> reduced effects &nbsp; <kbd>Esc</kbd> cursor
       </div>
       <div class="panel" id="ammo">
         <div class="n" id="ammoN">32</div>
