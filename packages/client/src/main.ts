@@ -94,6 +94,7 @@ const el = {
   wheelHint: document.getElementById('wheelHint')!,
   worldTags: document.getElementById('worldTags')!,
   wheelBudget: document.getElementById('wheelBudget')!,
+  heroName: document.getElementById('heroName')!,
 };
 
 for (let i = 0; i < MOVEMENT.DASH_CHARGES; i++) {
@@ -486,6 +487,7 @@ function updateHud(frameMs: number): void {
   }
 
   el.modeName.textContent = hero.camera === CameraMode.FPS ? 'FPS' : 'TPS';
+  el.heroName.textContent = HERO_NAME[hero.kind] ?? '';
 
   const qReady = hero.abilityQCooldown === 0;
   el.qcd.classList.toggle('ready', qReady);
