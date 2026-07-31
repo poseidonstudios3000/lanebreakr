@@ -6,8 +6,8 @@ row in it reads PASS.**
 
 ```
 CURRENT MILESTONE : M3 — Combat & Bots (in progress)
-LAST UPDATED      : 2026-07-31 (overnight session)
-TESTS             : 145 passing, 7 files
+LAST UPDATED      : 2026-07-31 (overnight session, cont.)
+TESTS             : 180 passing, 9 files
 REPO              : github.com/poseidonstudios3000/lanebreakr
 PLAY              : pnpm dev → localhost:5173
                     /?map=strip           THE STRIP, 3v3 vs bots
@@ -48,10 +48,10 @@ targets the gate.**
 |---|---|
 | `tick()` zero THREE/DOM imports, CI-enforced | PASS — purity guard in `eslint.config.js` |
 | Identical 10,000-tick hash in Node | PASS |
-| Identical hash in **Chrome and Firefox** via Playwright | **FAIL** — CI job not built |
+| Identical hash in **Chrome and Firefox** via Playwright | **FAIL** — `pnpm replay hash` emits the value; the browser half is not wired |
 | `mathd.ts` + `Math.*` ban green | PASS |
-| Physics gate: 10k sweeps, zero tunneling/stuck | **FAIL** — swept collision exists, the gate does not |
-| `.ovr` as `{seed, build_hash, balance_hash, input_log}` | **FAIL** — not built |
+| Physics gate: 10k sweeps, zero tunneling/stuck | **PARTIAL** — projectile tunnelling is asserted (12/12 at sub-tick offsets); the 10k randomized capsule sweep is not |
+| `.ovr` as `{seed, build_hash, balance_hash, input_log}` | **PASS** — 2.81 KB/s measured, ~2 MB for a full match |
 | Sim runs headless in Node | PASS |
 
 ## M2 — Lane ✅ COMPLETE
@@ -72,7 +72,8 @@ targets the gate.**
 | Bot target acquisition gated on `canSee()` | **PASS** — asserted directly |
 | A complete match is winnable and loseable vs bots | **PARTIAL** — playable and it terminates; see the limitation below |
 | TTK inside band as an analytic unit test | PASS (`balance.test.ts`) |
-| All 4 heroes with full kits | **FAIL** — one weapon (SMG) and one ability (GLITCH BOMB) so far |
+| All 4 heroes with full kits | **PARTIAL** — all four WEAPONS done (VOLT/HALO/BULWARK/RIFT, incl. pellets and projectiles). Abilities: only the GLITCH BOMB. The 12 kit abilities are derived in `docs/derived/abilities.ts` and unimplemented. |
+| Hero select | **FAIL** — a fixed draft (VOLT/HALO/BULWARK both sides) until M5 |
 | All 12 upgrades functional with visible model changes | **FAIL** — specified in `balance.ts`, not implemented |
 | `packages/telemetry` emits Q1 camera-toggle events | **FAIL** |
 | **Gate: play 10 matches. Is it addictive solo?** | not run |
@@ -84,6 +85,7 @@ targets the gate.**
 | **GLITCH BOMB** (D0a) | **DONE** — Q, 1.8s scramble, 11 tests, 6 of them asserting the design bar rather than the behaviour |
 | **Emote + ping wheel** (D1) | **DONE** — Z pings, X emotes, shared budget, pings team-only |
 | Reduced-effects accessibility toggle | **DONE** — G |
+| `.ovr` replay + `replay-diff` | **DONE** — record / verify / hash, F9 in client |
 | Tone decision (D0) | **RECORDED** — art pass not started |
 
 ---
@@ -113,12 +115,23 @@ above is fixed, because both symptoms may share a cause.
 
 ## Next task
 
-`tools/replay-diff` + the `.ovr` input-log format. It is the cheapest remaining
-M1 row, it unblocks half of M6 (§9.1), and it makes every bug from here on
-reproducible from a seed rather than from a description.
+**The 12 kit abilities** (Q/E/R per hero). They are already derived and
+cross-verified in `docs/derived/abilities.ts` — folding them into `balance.ts`
+and implementing them is the largest remaining M3 row, and it is what makes the
+four heroes feel like four heroes rather than four guns.
 
-After that, in order: the four hero kits and weapons (M3), then upgrades, then
-`tools/peek-test` and the cross-engine determinism CI job to close M1.
+Two resolved conflicts to carry across when folding them in: VOLT's Overcharge
+is **+25%** (DECISIONS 10 — the only value that keeps the SMG interval an
+integer tick), and the damage pipeline must state the shotgun headshot
+exception explicitly (DECISIONS 14).
+
+After that: the 12 upgrades, then `tools/peek-test` and the cross-engine
+determinism CI job to close M1.
+
+**Remember to bump `BUILD_HASH` whenever `tick()` changes shape.** It was missed
+once already this session — heroes gained a `kind`, balance was unchanged, and
+an old replay verified against the new build and silently produced a different
+hash. That is exactly the case `balanceHash` alone cannot catch.
 
 ## Last failures — all resolved this session
 
