@@ -129,6 +129,7 @@ export interface PlayerInput {
 export interface HeroState {
   id: EntityId;
   team: Team;
+  kind: HeroKind;
   alive: boolean;
 
   /** integer millimetres */
@@ -224,6 +225,38 @@ export interface HeroState {
   lastMoveX: number;
   lastMoveZ: number;
   noInputTicks: number;
+}
+
+/**
+ * The four MVP heroes. §8 describes each in one sentence and asks for extreme
+ * silhouette differentiation; the weapon IS the identity, and there is no
+ * swapping.
+ *
+ * Names and mechanics are the PRD's. The FICTION is now the tone in
+ * DIRECTION.md §0 — toys inside a simulation — so these fire paint, foam and
+ * water rather than bullets. That is a reskin of the same numbers, which is
+ * exactly why the tone decision was cheap to take late.
+ */
+export const enum HeroKind {
+  Volt = 0,    // SPRAYER   — rapid, close, run-and-gun
+  Halo = 1,    // PINPOINT  — slow, precise, punishes standing still
+  Bulwark = 2, // SCATTER   — 8 pellets, walks at you
+  Rift = 3,    // LOBBER    — arcing projectile, splash, zones ground
+}
+
+export interface ProjectileState {
+  id: EntityId;
+  ownerId: EntityId;
+  team: Team;
+  kind: HeroKind;
+  px: number;
+  py: number;
+  pz: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  ticksLeft: number;
+  alive: boolean;
 }
 
 export const enum TrooperKind {
@@ -402,6 +435,7 @@ export interface WorldState {
   orbs: OrbState[];
   structures: StructureState[];
   glitches: GlitchState[];
+  projectiles: ProjectileState[];
   pings: PingState[];
   /** indexed by Team.A / Team.B; Team.Neutral never has one */
   teams: TeamState[];

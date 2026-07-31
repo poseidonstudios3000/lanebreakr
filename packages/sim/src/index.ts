@@ -6,7 +6,7 @@ export * as mathd from './mathd.js';
 export * from './world.js';
 export * from './map/greybox.js';
 export { aimDir, yawSin, yawCos } from './systems/movement.js';
-export { currentSpreadDeg, falloffMult, muzzleBlocked } from './systems/combat.js';
+export { currentSpreadDeg, falloffMult, muzzleBlocked, weaponOf, WEAPON_NAME, HERO_NAME, traceRay } from './systems/combat.js';
 export { SOCIAL, EMOTE_NAMES, PING_NAMES, visiblePings, applyAction, cancelEmote } from './systems/social.js';
 export { GLITCH_ORB_NOTE, isGlitched, castGlitch } from './systems/glitch.js';
 export { canSee, canSeeRaw, newVisibilityMemory } from './systems/visibility.js';

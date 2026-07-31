@@ -12,7 +12,7 @@ import { SPINE, ENTITY, MOVEMENT, ECONOMY, WORLD, COMBAT, M0, respawnTicks, sudd
 import {
   type WorldState, type HeroState, type TargetState, type PlayerInput,
   type TrooperState, type StructureState, type TeamState,
-  MoveState, CameraMode, Team, MatchPhase, StructureKind, SoulSource, Btn,
+  MoveState, CameraMode, Team, MatchPhase, StructureKind, SoulSource, Btn, HeroKind,
 } from './types.js';
 import { buildGreybox } from './map/greybox.js';
 import { buildStrip, type GameMap } from './map/strip.js';
@@ -24,9 +24,18 @@ import { stepStructures, structureMaxHp, onStructureDestroyed, markStructureAggr
 import { updateVisibility, newVisibilityMemory, canSee, type VisibilityMemory } from './systems/visibility.js';
 import { stepGlitch, castGlitch, scrambleInput } from './systems/glitch.js';
 import { stepSocial, applyAction, cancelEmote, SOCIAL } from './systems/social.js';
+import { stepProjectiles } from './systems/projectiles.js';
 import { botInput, makeBot, BOT_TIERS, type BotState, type BotTier } from './systems/bots.js';
 
 const MM = 1000;
+
+/** Magazine per hero — §6.3, weapon identity is hero identity. */
+const MAG_OF: Record<number, number> = {
+  [HeroKind.Volt]: COMBAT.SMG.MAG_SIZE,
+  [HeroKind.Halo]: COMBAT.RIFLE.MAG_SIZE,
+  [HeroKind.Bulwark]: COMBAT.SHOTGUN.MAG_SIZE,
+  [HeroKind.Rift]: COMBAT.LAUNCHER.MAG_SIZE,
+};
 
 export type WorldMode = 'greybox' | 'strip';
 
@@ -43,9 +52,9 @@ export interface World {
   bots: Map<number, BotState>;
 }
 
-export function createHero(id: number, team: Team, x: number, y: number, z: number, yaw: number): HeroState {
+export function createHero(id: number, team: Team, x: number, y: number, z: number, yaw: number, kind: HeroKind = HeroKind.Volt): HeroState {
   return {
-    id, team, alive: true,
+    id, team, kind, alive: true,
     px: Math.round(x * MM), py: Math.round(y * MM), pz: Math.round(z * MM),
     vx: 0, vy: 0, vz: 0,
     yaw, pitch: 0,
@@ -58,7 +67,7 @@ export function createHero(id: number, team: Team, x: number, y: number, z: numb
     slideTicksLeft: 0, slideCooldownTicks: 0,
     mantleTicksLeft: 0, mantleTotalTicks: 1, mantleTargetX: 0, mantleTargetY: 0, mantleTargetZ: 0,
     ziplineId: -1, ziplineT: 0, ziplineDir: 1,
-    ammo: 32, reloadTicksLeft: 0, fireCooldownTicks: 0, postReloadLockout: 0,
+    ammo: MAG_OF[kind] ?? 32, reloadTicksLeft: 0, fireCooldownTicks: 0, postReloadLockout: 0,
     meleeTicksLeft: 0, meleeCooldownTicks: 0,
     spreadMilliDeg: 0, spreadDecayDelay: 0,
     recoilVertMilliDeg: 0, recoilHorizMilliDeg: 0, recoilRecoveryDelay: 0,
@@ -100,7 +109,11 @@ export function createWorld(matchSeed: number, mode: WorldMode = 'greybox'): Wor
       for (let i = 0; i < 3; i++) {
         // Cover blocks occupy |z| ∈ [4.5, 8.5]; stay inside that.
         const lateral = [-2.5, 0, 2.5][i]!;
-        heroes.push(createHero(nextId++, team, sp.x, sp.y, sp.z + lateral, sp.yaw));
+        // §8's four heroes. A fixed draft for now: every match fields VOLT,
+        // HALO and BULWARK on both sides. Hero select is M5; until then this
+        // at least makes all three hitscan weapons playable and benchable.
+        const kind = [HeroKind.Volt, HeroKind.Halo, HeroKind.Bulwark][i]!;
+        heroes.push(createHero(nextId++, team, sp.x, sp.y, sp.z + lateral, sp.yaw, kind));
       }
     }
     for (const site of map.structures) {
@@ -127,7 +140,7 @@ export function createWorld(matchSeed: number, mode: WorldMode = 'greybox'): Wor
       tick: 0, matchSeed,
       phase: mode === 'strip' ? MatchPhase.Live : MatchPhase.Warmup,
       winner: -1,
-      heroes, troopers: [], orbs: [], structures, glitches: [], pings: [],
+      heroes, troopers: [], orbs: [], structures, glitches: [], projectiles: [], pings: [],
       teams: [emptyTeam(), emptyTeam()],
       nextWaveTick: WORLD.TROOPERS.FIRST_WAVE_TICK,
       waveIndex: 0,
@@ -272,7 +285,7 @@ export function tick(world: World, inputs: readonly PlayerInput[]): void {
         h.hp = h.maxHp;
         h.px = Math.round(sp.x * MM); h.py = Math.round(sp.y * MM); h.pz = Math.round(sp.z * MM);
         h.vx = 0; h.vy = 0; h.vz = 0;
-        h.ammo = 32; h.reloadTicksLeft = 0;
+        h.ammo = MAG_OF[h.kind] ?? 32; h.reloadTicksLeft = 0;
       }
       continue;
     }
@@ -344,6 +357,7 @@ export function tick(world: World, inputs: readonly PlayerInput[]): void {
 
   if (world.mode === 'strip') {
     stepGlitch(s, applyDamage);
+    stepProjectiles(s, world.map.boxes, applyDamage);
     stepSocial(s);
     stepTroopers(s, world.map.trooperSpawn, applyDamage);
     stepStructures(s, applyDamage);
@@ -417,6 +431,7 @@ export function hashState(s: WorldState): number {
     push(h.shotsFired); push(h.hitsLanded); push(h.headshots); push(h.damageDealt);
     push(h.glitchTicksLeft); push(h.glitchSeed); push(h.abilityQCooldown);
     push(h.emote); push(h.emoteTicksLeft); push(h.wheelBudget); push(h.wheelCooldown);
+    push(h.kind);
     push(h.prevButtons);
   }
   for (const t of s.troopers) {
@@ -426,6 +441,10 @@ export function hashState(s: WorldState): number {
   for (const o of s.orbs) {
     push(o.id); push(o.px); push(o.py); push(o.pz); push(o.hoverTicksLeft);
     push(o.claimProgress); push(o.denyProgress); push(o.alive ? 1 : 0);
+  }
+  for (const p of s.projectiles) {
+    push(p.id); push(p.px); push(p.py); push(p.pz);
+    push(p.vx); push(p.vy); push(p.vz); push(p.ticksLeft); push(p.alive ? 1 : 0);
   }
   for (const st of s.structures) {
     push(st.id); push(st.hp); push(st.alive ? 1 : 0); push(st.targetId);

@@ -942,5 +942,14 @@ export function balanceHash(): number {
   return h >>> 0;
 }
 
-/** Bumped by hand when tick() changes shape. Pinned into every replay. */
-export const BUILD_HASH = 0x00030001; // M3.1
+/**
+ * Bumped BY HAND whenever tick() changes shape — a new state field, a new
+ * system, a reordering of `hashState`. Pinned into every replay so playback can
+ * refuse rather than render a subtly wrong match.
+ *
+ * 0x00030002: heroes carry a `kind`, so the four weapons and RIFT's projectiles
+ * are part of state. Replays recorded before this cannot be trusted against it,
+ * and the balance numbers did NOT change — which is precisely the case that
+ * would have slipped through if only balanceHash() guarded playback.
+ */
+export const BUILD_HASH = 0x00030002; // M3.2 — hero kinds + projectiles

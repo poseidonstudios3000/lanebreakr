@@ -10,7 +10,7 @@
 
 import {
   createWorld, tick, fillWithBots, BOT_TIERS, SPINE, CAMERA, COMBAT, MOVEMENT, CameraMode,
-  EMOTE_NAMES, PING_NAMES, SOCIAL, visiblePings,
+  EMOTE_NAMES, PING_NAMES, SOCIAL, visiblePings, weaponOf, WEAPON_NAME, HERO_NAME,
   currentSpreadDeg, muzzleBlocked, aimDir, ENTITY, type HitEvent,
 } from '@ovrrun/sim';
 import { Scene } from './render/scene.js';
@@ -472,9 +472,10 @@ function updateHud(frameMs: number): void {
 
   el.ammoN.textContent = hero.reloadTicksLeft > 0 ? '--' : String(hero.ammo);
   el.ammoN.classList.toggle('low', hero.ammo <= 6 && hero.reloadTicksLeft === 0);
+  const wep = weaponOf(hero.kind);
   el.ammoSub.innerHTML = hero.reloadTicksLeft > 0
     ? '<span id="reload">RELOADING</span>'
-    : `SMG · ${(60 / COMBAT.SMG.FIRE_INTERVAL_TICKS * 60).toFixed(0)} RPM`;
+    : `${WEAPON_NAME[hero.kind]} · ${((SPINE.SIM_HZ / wep.FIRE_INTERVAL_TICKS) * 60).toFixed(0)} RPM`;
 
   for (let i = 0; i < budgetPips.length; i++) {
     budgetPips[i]!.classList.toggle('on', i < hero.wheelBudget);
